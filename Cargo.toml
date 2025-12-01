@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Sonny Scroggin <sonny@scrogson.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/scrogson/dream"
+
+[workspace.dependencies]
+# Internal crates
+dream-core = { path = "crates/dream-core" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+postcard = { version = "1.0", features = ["alloc"] }
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Concurrent data structures
+dashmap = "6"
+
+# Error handling
+thiserror = "2"
+
+# Testing
+tokio-test = "0.4"

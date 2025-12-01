@@ -1,0 +1,16 @@
+[package]
+name = "dream-core"
+description = "Core types for DREAM - Distributed Rust Erlang Abstract Machine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
