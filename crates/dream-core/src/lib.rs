@@ -10,6 +10,9 @@
 //! - [`Message`] - Trait for serializable messages
 //! - [`SystemMessage`] - Internal system messages (Exit, Down, Timeout)
 
+#![deny(warnings)]
+#![deny(missing_docs)]
+
 mod exit_reason;
 mod message;
 mod pid;
@@ -18,6 +21,6 @@ mod system_message;
 
 pub use exit_reason::ExitReason;
 pub use message::{DecodeError, Message};
-pub use pid::Pid;
+pub use pid::{current_creation, increment_creation, Pid};
 pub use reference::Ref;
 pub use system_message::SystemMessage;
