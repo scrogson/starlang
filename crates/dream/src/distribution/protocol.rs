@@ -26,8 +26,10 @@ pub enum DistMessage {
         node_name: String,
         /// The receiving node's creation number.
         creation: u32,
-        /// The NodeId assigned to the connecting node.
-        assigned_node_id: u32,
+        /// The NodeId assigned to the connecting node (for the connecting node to tell us about itself).
+        your_node_id: u32,
+        /// The NodeId the connecting node should use for this node (the welcoming node).
+        my_node_id: u32,
     },
 
     // === Messaging ===

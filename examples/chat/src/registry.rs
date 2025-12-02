@@ -152,6 +152,8 @@ impl GenServer for Registry {
                 }
 
                 // Check global registry (might exist on another node)
+                let all_global = global::registered();
+                tracing::debug!(global_name = %global_name, all_names = ?all_global, "Checking global registry");
                 if let Some(pid) = global::whereis(&global_name) {
                     tracing::info!(room = %name, pid = ?pid, "Found room in global registry");
                     // Cache it locally

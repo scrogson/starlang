@@ -137,6 +137,11 @@ impl DistributionManager {
             message_sender_loop(rx, node_id_u32).await;
         });
 
+        // Spawn message receiver task
+        tokio::spawn(async move {
+            message_receiver_loop(node_id_u32).await;
+        });
+
         // Request global registry sync from the new node
         super::global::global_registry().request_sync(node_id);
 
@@ -165,9 +170,10 @@ impl DistributionManager {
             DistMessage::Welcome {
                 node_name,
                 creation,
-                assigned_node_id,
+                your_node_id: _,  // We don't need our own ID
+                my_node_id,       // This is the ID we should use for the remote node
             } => {
-                let node_id = NodeId::new(assigned_node_id);
+                let node_id = NodeId::new(my_node_id);
                 let info = NodeInfo::new(
                     NodeName::new(node_name),
                     node_id,
@@ -281,10 +287,13 @@ async fn handle_incoming_connection(
     let assigned_id = manager.allocate_node_id();
 
     // Send Welcome
+    // - your_node_id: the ID we assigned to the connecting node (for them to know their ID on our side)
+    // - my_node_id: the ID they should use for us (same as their assigned ID, since we use it to route)
     let welcome = DistMessage::Welcome {
         node_name: our_node_name,
         creation: our_creation,
-        assigned_node_id: assigned_id.as_u32(),
+        your_node_id: assigned_id.as_u32(),
+        my_node_id: assigned_id.as_u32(),  // They use the same ID for us as we use for them
     };
     connection.send_message(&welcome).await?;
 
@@ -319,6 +328,9 @@ async fn handle_incoming_connection(
     tokio::spawn(async move {
         message_receiver_loop(node_id).await;
     });
+
+    // Send our global registry to the new node
+    super::global::global_registry().request_sync(assigned_id);
 
     tracing::info!(
         remote_name = %remote_name,
@@ -412,13 +424,21 @@ async fn message_receiver_loop(node_id: u32) {
 async fn handle_incoming_message(from_node: u32, msg: DistMessage) {
     match msg {
         DistMessage::Send { to, from: _, payload } => {
+            // The PID will have our node ID from the sender's perspective.
+            // Since both sides use the same node ID for each other, if to.node() == from_node,
+            // then the sender is addressing a process on this node.
+            // We need to translate it back to local (node=0) for delivery.
+            if to.node() != from_node && !to.is_local() {
+                // This PID refers to a process on a different node - shouldn't happen
+                tracing::warn!(?to, from_node, "Received message for PID on different node");
+                return;
+            }
+
+            let local_pid = Pid::from_parts(0, to.id(), to.creation());
+
             // Deliver to local process
-            if to.is_local() {
-                if let Some(handle) = dream_process::global::try_handle() {
-                    let _ = handle.registry().send_raw(to, payload);
-                }
-            } else {
-                tracing::warn!(?to, "Received message for non-local PID");
+            if let Some(handle) = dream_process::global::try_handle() {
+                let _ = handle.registry().send_raw(local_pid, payload);
             }
         }
         DistMessage::Ping { seq } => {
