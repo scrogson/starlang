@@ -7,7 +7,26 @@ use crate::process_handle::ProcessHandle;
 use crate::SendError;
 use dashmap::DashMap;
 use dream_core::{Message, Pid};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Type alias for the remote send hook function.
+///
+/// This function is called when attempting to send to a non-local PID.
+/// Returns `Ok(())` if the message was sent, or an error.
+pub type RemoteSendHook = fn(pid: Pid, data: Vec<u8>) -> Result<(), SendError>;
+
+/// Global hook for sending to remote processes.
+///
+/// Set by the distribution layer when initialized.
+static REMOTE_SEND_HOOK: OnceLock<RemoteSendHook> = OnceLock::new();
+
+/// Set the remote send hook.
+///
+/// This should be called by the distribution layer when it's initialized.
+/// Can only be set once.
+pub fn set_remote_send_hook(hook: RemoteSendHook) -> Result<(), RemoteSendHook> {
+    REMOTE_SEND_HOOK.set(hook)
+}
 
 /// A thread-safe registry of all running processes.
 ///
@@ -76,7 +95,22 @@ impl ProcessRegistry {
     }
 
     /// Sends a raw message to a process.
+    ///
+    /// If the PID refers to a remote process and distribution is configured,
+    /// the message will be routed through the distribution layer.
     pub fn send_raw(&self, pid: Pid, data: Vec<u8>) -> Result<(), SendError> {
+        // Check if this is a remote PID
+        if !pid.is_local() {
+            // Try to send via distribution layer
+            if let Some(hook) = REMOTE_SEND_HOOK.get() {
+                return hook(pid, data);
+            } else {
+                // Distribution not configured - can't send to remote
+                return Err(SendError::ProcessNotFound(pid));
+            }
+        }
+
+        // Local PID - send directly
         match self.processes.get(&pid) {
             Some(handle) => handle.send_raw(data),
             None => Err(SendError::ProcessNotFound(pid)),

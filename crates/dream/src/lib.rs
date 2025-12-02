@@ -113,6 +113,15 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+// Allow dead_code in distribution module until fully integrated
+#[allow(dead_code)]
+pub mod distribution;
+
+/// Distribution module for connecting DREAM nodes.
+///
+/// See [`distribution`] module for details.
+pub use distribution as dist;
+
 // Re-export global runtime functions from dream_process
 pub use dream_process::global::{
     alive, handle, init, register, spawn, spawn_link, try_handle, unregister, whereis,
@@ -125,7 +134,7 @@ pub use dream_runtime::{
 };
 
 // Re-export core types
-pub use dream_core::{ExitReason, Message, Pid, Ref};
+pub use dream_core::{ExitReason, Message, NodeId, NodeInfo, NodeName, Pid, Ref};
 
 // Re-export runtime and process types
 pub use dream_process::{Runtime, RuntimeHandle};
@@ -151,7 +160,7 @@ pub use dream_macros::{dream_process, main, self_pid, GenServerImpl};
 /// ```
 pub mod prelude {
     // Core types
-    pub use dream_core::{ExitReason, Message, Pid, Ref};
+    pub use dream_core::{ExitReason, Message, NodeId, NodeInfo, NodeName, Pid, Ref};
 
     // Runtime and process
     pub use dream_process::{Runtime, RuntimeHandle};

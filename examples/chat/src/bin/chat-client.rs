@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run --bin chat-client
+//! cargo run --bin chat-client -- --port 9999
 //! ```
 //!
 //! # Commands
@@ -19,7 +19,7 @@
 //! - `/users <room>` - List users in a room
 //! - `/quit` - Disconnect
 
-use std::env;
+use clap::Parser;
 use std::io::{self, BufRead, Write};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -30,9 +30,23 @@ mod protocol;
 
 use protocol::{frame_message, parse_frame, ClientCommand, ServerEvent};
 
+/// DREAM Chat Client
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Server port to connect to
+    #[arg(short, long, default_value = "9999")]
+    port: u16,
+
+    /// Server host to connect to
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    host: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = env::var("CHAT_SERVER").unwrap_or_else(|_| "127.0.0.1:9999".to_string());
+    let args = Args::parse();
+    let addr = format!("{}:{}", args.host, args.port);
 
     println!("Connecting to {}...", addr);
     let stream = TcpStream::connect(&addr).await?;

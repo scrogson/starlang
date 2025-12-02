@@ -93,6 +93,26 @@ impl Pid {
         Self { node, id, creation }
     }
 
+    /// Creates a remote `Pid` for a process on another node.
+    ///
+    /// This is used when receiving PIDs from remote nodes during distribution.
+    /// The node ID must be > 0 (0 is reserved for the local node).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dream_core::Pid;
+    ///
+    /// let remote_pid = Pid::remote(1, 100, 5);
+    /// assert!(!remote_pid.is_local());
+    /// assert_eq!(remote_pid.node(), 1);
+    /// ```
+    pub const fn remote(node: u32, id: u64, creation: u32) -> Self {
+        // Note: We don't enforce node > 0 at compile time, but callers should
+        // only use this for remote PIDs
+        Self { node, id, creation }
+    }
+
     /// Returns the node identifier.
     ///
     /// A value of 0 indicates the local node.

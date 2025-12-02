@@ -14,6 +14,20 @@ dream-supervisor = { path = "../dream-supervisor" }
 dream-application = { path = "../dream-application" }
 dream-macros = { path = "../dream-macros" }
 
+# Distribution
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+rcgen = "0.13"
+tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+parking_lot = "0.12"
+dashmap = "6"
+async-trait = "0.1"
+hostname = "0.4"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 serde = { version = "1", features = ["derive"] }
