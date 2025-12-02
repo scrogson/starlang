@@ -18,26 +18,24 @@
 //! # Quick Start
 //!
 //! ```ignore
-//! use dream::prelude::*;
+//! #[dream::main]
+//! async fn main() {
+//!     // Spawn a process using the global runtime
+//!     let pid = dream::spawn(|ctx| async move {
+//!         println!("Hello from process {:?}", ctx.pid());
+//!     });
 //!
-//! // Create a runtime
-//! let runtime = Runtime::new();
-//! let handle = runtime.handle();
-//!
-//! // Spawn a process
-//! let pid = handle.spawn(async move |ctx| {
-//!     println!("Hello from process {:?}", ctx.self_pid());
-//! });
-//!
-//! // Send a message
-//! handle.send(pid, b"Hello!".to_vec());
+//!     // Or get the handle for more control
+//!     let handle = dream::handle();
+//!     handle.registry().send_raw(pid, b"Hello!".to_vec());
+//! }
 //! ```
 //!
 //! # GenServer Example
 //!
 //! ```ignore
 //! use dream::prelude::*;
-//! use dream::gen_server::{GenServer, InitResult, CallResult, CastResult, InfoResult, ContinueResult, From, ContinueArg};
+//! use dream::gen_server::{async_trait, GenServer, InitResult, CallResult, CastResult, InfoResult, ContinueResult, From, ContinueArg};
 //! use serde::{Serialize, Deserialize};
 //!
 //! struct Counter;
@@ -48,6 +46,7 @@
 //!     Increment,
 //! }
 //!
+//! #[async_trait]
 //! impl GenServer for Counter {
 //!     type State = i64;
 //!     type InitArg = i64;
@@ -55,11 +54,16 @@
 //!     type Cast = ();
 //!     type Reply = i64;
 //!
-//!     fn init(initial: i64) -> InitResult<i64> {
+//!     async fn init(_ctx: &mut Context, initial: i64) -> InitResult<i64> {
 //!         InitResult::Ok(initial)
 //!     }
 //!
-//!     fn handle_call(request: CounterCall, _from: From, state: &mut i64) -> CallResult<i64, i64> {
+//!     async fn handle_call(
+//!         _ctx: &mut Context,
+//!         request: CounterCall,
+//!         _from: From,
+//!         state: &mut i64,
+//!     ) -> CallResult<i64, i64> {
 //!         match request {
 //!             CounterCall::Get => CallResult::Reply(*state, *state),
 //!             CounterCall::Increment => {
@@ -69,15 +73,15 @@
 //!         }
 //!     }
 //!
-//!     fn handle_cast(_msg: (), state: &mut i64) -> CastResult<i64> {
+//!     async fn handle_cast(_ctx: &mut Context, _msg: (), state: &mut i64) -> CastResult<i64> {
 //!         CastResult::NoReply(*state)
 //!     }
 //!
-//!     fn handle_info(_msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+//!     async fn handle_info(_ctx: &mut Context, _msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
 //!         InfoResult::NoReply(*state)
 //!     }
 //!
-//!     fn handle_continue(_arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
+//!     async fn handle_continue(_ctx: &mut Context, _arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
 //!         ContinueResult::NoReply(*state)
 //!     }
 //! }
@@ -109,6 +113,17 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+// Re-export global runtime functions from dream_process
+pub use dream_process::global::{
+    alive, handle, init, register, spawn, spawn_link, try_handle, unregister, whereis,
+};
+
+// Re-export task-local functions for process operations without ctx
+pub use dream_runtime::{
+    current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
+    with_ctx_async,
+};
+
 // Re-export core types
 pub use dream_core::{ExitReason, Message, Pid, Ref};
 
@@ -126,7 +141,7 @@ pub use dream_supervisor as supervisor;
 pub use dream_application as application;
 
 // Re-export macros
-pub use dream_macros::{dream_process, GenServerImpl};
+pub use dream_macros::{dream_process, main, self_pid, GenServerImpl};
 
 /// Prelude module for convenient imports.
 ///
@@ -157,7 +172,13 @@ pub mod prelude {
     pub use dream_application::{AppConfig, AppController, AppSpec, Application, StartResult};
 
     // Macros
-    pub use dream_macros::{dream_process, GenServerImpl};
+    pub use dream_macros::{dream_process, main, self_pid, GenServerImpl};
+
+    // Task-local functions for process operations without ctx
+    pub use dream_runtime::{
+        current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
+        with_ctx_async,
+    };
 }
 
 #[cfg(test)]
@@ -183,7 +204,7 @@ mod tests {
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
-        let _pid = handle.spawn(move |_ctx| async move {
+        let _pid = handle.spawn(move || async move {
             executed_clone.store(true, Ordering::SeqCst);
         });
 
@@ -195,6 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gen_server_integration() {
+        use dream_gen_server::async_trait;
         use serde::{Deserialize, Serialize};
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
@@ -207,6 +229,7 @@ mod tests {
             Ping,
         }
 
+        #[async_trait]
         impl GenServer for TestServer {
             type State = ();
             type InitArg = ();
@@ -214,11 +237,11 @@ mod tests {
             type Cast = ();
             type Reply = String;
 
-            fn init(_: ()) -> InitResult<()> {
+            async fn init(_: ()) -> InitResult<()> {
                 InitResult::Ok(())
             }
 
-            fn handle_call(
+            async fn handle_call(
                 request: TestCall,
                 _from: From,
                 state: &mut (),
@@ -228,35 +251,31 @@ mod tests {
                 }
             }
 
-            fn handle_cast(_: (), state: &mut ()) -> CastResult<()> {
+            async fn handle_cast(_: (), state: &mut ()) -> CastResult<()> {
                 CastResult::NoReply(*state)
             }
 
-            fn handle_info(_: Vec<u8>, state: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: Vec<u8>, state: &mut ()) -> InfoResult<()> {
                 InfoResult::NoReply(*state)
             }
 
-            fn handle_continue(_: ContinueArg, state: &mut ()) -> ContinueResult<()> {
+            async fn handle_continue(_: ContinueArg, state: &mut ()) -> ContinueResult<()> {
                 ContinueResult::NoReply(*state)
             }
         }
 
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        crate::init();
+        let handle = crate::handle();
 
         // Start the server
-        let server_pid = dream_gen_server::start::<TestServer>(&handle, ()).await.unwrap();
+        let server_pid = dream_gen_server::start::<TestServer>(()).await.unwrap();
 
-        // We need to call from within a process since `call` requires a Context
+        // We need to call from within a process since `call` requires task-local context
         let test_passed = Arc::new(AtomicBool::new(false));
         let test_passed_clone = test_passed.clone();
-        let handle_clone = handle.clone();
 
-        handle.spawn(move |ctx| async move {
-            let mut ctx = ctx;
+        handle.spawn(move || async move {
             let reply: String = dream_gen_server::call::<TestServer>(
-                &handle_clone,
-                &mut ctx,
                 server_pid,
                 TestCall::Ping,
                 Duration::from_secs(5),

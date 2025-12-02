@@ -80,6 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
+        // Check for local commands first
+        if matches!(line, "/help" | "/h" | "/?") {
+            print_help();
+            continue;
+        }
+
         let cmd = match parse_input(line) {
             Some(cmd) => cmd,
             None => {
@@ -87,12 +93,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-
-        // Check for local commands
-        if matches!(line, "/help" | "/h" | "/?") {
-            print_help();
-            continue;
-        }
 
         // Send command to server
         let frame = frame_message(&cmd);

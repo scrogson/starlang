@@ -93,6 +93,7 @@ mod protocol;
 mod server;
 mod types;
 
+pub use async_trait::async_trait;
 pub use error::{CallError, StartError, StopError};
 pub use server::{call, cast, reply, start, start_link, stop, GenServer};
 pub use types::{
@@ -101,13 +102,24 @@ pub use types::{
 
 // Re-export commonly used types
 pub use dream_core::{ExitReason, Message, Pid, Ref};
-pub use dream_process::RuntimeHandle;
-pub use dream_runtime::Context;
+
+/// Prelude module for convenient imports.
+///
+/// Import everything needed to implement a GenServer with:
+/// ```ignore
+/// use dream::gen_server::prelude::*;
+/// ```
+pub mod prelude {
+    pub use crate::{
+        async_trait, call, cast, start, start_link, stop, CallError, CallResult, CastResult,
+        ContinueArg, ContinueResult, ExitReason, From, GenServer, InfoResult, InitResult, Pid,
+        StartError, StopError,
+    };
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dream_process::Runtime;
     use serde::{Deserialize, Serialize};
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::Arc;
@@ -130,6 +142,7 @@ mod tests {
         Set(i64),
     }
 
+    #[async_trait]
     impl GenServer for Counter {
         type State = i64;
         type InitArg = i64;
@@ -137,11 +150,11 @@ mod tests {
         type Cast = CounterCast;
         type Reply = i64;
 
-        fn init(initial: i64) -> InitResult<i64> {
+        async fn init(initial: i64) -> InitResult<i64> {
             InitResult::ok(initial)
         }
 
-        fn handle_call(
+        async fn handle_call(
             request: CounterCall,
             _from: From,
             state: &mut i64,
@@ -159,28 +172,28 @@ mod tests {
             }
         }
 
-        fn handle_cast(msg: CounterCast, _state: &mut i64) -> CastResult<i64> {
+        async fn handle_cast(msg: CounterCast, _state: &mut i64) -> CastResult<i64> {
             match msg {
                 CounterCast::Reset => CastResult::noreply(0),
                 CounterCast::Set(n) => CastResult::noreply(n),
             }
         }
 
-        fn handle_info(_msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+        async fn handle_info(_msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
             CastResult::noreply(*state)
         }
 
-        fn handle_continue(_arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
+        async fn handle_continue(_arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
             CastResult::noreply(*state)
         }
     }
 
     #[tokio::test]
     async fn test_start_gen_server() {
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
+        let handle = dream_process::global::handle();
 
-        let pid = start::<Counter>(&handle, 42).await.unwrap();
+        let pid = start::<Counter>(42).await.unwrap();
         assert!(handle.alive(pid));
 
         // Give it time to run
@@ -189,29 +202,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_gen_server_call() {
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
+        let handle = dream_process::global::handle();
 
-        let server_pid = start::<Counter>(&handle, 10).await.unwrap();
+        let server_pid = start::<Counter>(10).await.unwrap();
 
         // Create a client process to make the call
         let result = Arc::new(AtomicI64::new(-1));
         let result_clone = result.clone();
 
-        let _client_pid = handle.spawn(move |mut ctx| async move {
-            let runtime = Runtime::new();
-            let handle = runtime.handle();
-
+        let _client_pid = handle.spawn(move || async move {
             // Make a call to get the current value
-            match call::<Counter>(
-                &handle,
-                &mut ctx,
-                server_pid,
-                CounterCall::Get,
-                Duration::from_secs(5),
-            )
-            .await
-            {
+            match call::<Counter>(server_pid, CounterCall::Get, Duration::from_secs(5)).await {
                 Ok(value) => {
                     result_clone.store(value, Ordering::SeqCst);
                 }
@@ -229,13 +231,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_gen_server_cast() {
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
+        let handle = dream_process::global::handle();
 
-        let server_pid = start::<Counter>(&handle, 10).await.unwrap();
+        let server_pid = start::<Counter>(10).await.unwrap();
 
         // Send a cast to reset the counter
-        cast::<Counter>(&handle, server_pid, CounterCast::Reset).unwrap();
+        cast::<Counter>(server_pid, CounterCast::Reset).unwrap();
 
         // Give it time to process
         sleep(Duration::from_millis(50)).await;
@@ -244,19 +246,8 @@ mod tests {
         let result = Arc::new(AtomicI64::new(-1));
         let result_clone = result.clone();
 
-        let _client_pid = handle.spawn(move |mut ctx| async move {
-            let runtime = Runtime::new();
-            let handle = runtime.handle();
-
-            match call::<Counter>(
-                &handle,
-                &mut ctx,
-                server_pid,
-                CounterCall::Get,
-                Duration::from_secs(5),
-            )
-            .await
-            {
+        let _client_pid = handle.spawn(move || async move {
+            match call::<Counter>(server_pid, CounterCall::Get, Duration::from_secs(5)).await {
                 Ok(value) => {
                     result_clone.store(value, Ordering::SeqCst);
                 }
@@ -273,6 +264,7 @@ mod tests {
     async fn test_init_stop() {
         struct StoppingServer;
 
+        #[async_trait]
         impl GenServer for StoppingServer {
             type State = ();
             type InitArg = bool;
@@ -280,7 +272,7 @@ mod tests {
             type Cast = ();
             type Reply = ();
 
-            fn init(should_stop: bool) -> InitResult<()> {
+            async fn init(should_stop: bool) -> InitResult<()> {
                 if should_stop {
                     InitResult::stop(ExitReason::error("init failed"))
                 } else {
@@ -288,32 +280,31 @@ mod tests {
                 }
             }
 
-            fn handle_call(_: (), _: From, _: &mut ()) -> CallResult<(), ()> {
+            async fn handle_call(_: (), _: From, _: &mut ()) -> CallResult<(), ()> {
                 CallResult::reply((), ())
             }
 
-            fn handle_cast(_: (), _: &mut ()) -> CastResult<()> {
+            async fn handle_cast(_: (), _: &mut ()) -> CastResult<()> {
                 CastResult::noreply(())
             }
 
-            fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
                 CastResult::noreply(())
             }
 
-            fn handle_continue(_: ContinueArg, _: &mut ()) -> ContinueResult<()> {
+            async fn handle_continue(_: ContinueArg, _: &mut ()) -> ContinueResult<()> {
                 CastResult::noreply(())
             }
         }
 
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
 
         // Should start successfully
-        let pid = start::<StoppingServer>(&handle, false).await;
+        let pid = start::<StoppingServer>(false).await;
         assert!(pid.is_ok());
 
         // Should fail to start
-        let result = start::<StoppingServer>(&handle, true).await;
+        let result = start::<StoppingServer>(true).await;
         assert!(matches!(result, Err(StartError::Stop(_))));
     }
 
@@ -321,6 +312,7 @@ mod tests {
     async fn test_init_ignore() {
         struct IgnoringServer;
 
+        #[async_trait]
         impl GenServer for IgnoringServer {
             type State = ();
             type InitArg = ();
@@ -328,31 +320,30 @@ mod tests {
             type Cast = ();
             type Reply = ();
 
-            fn init(_: ()) -> InitResult<()> {
+            async fn init(_: ()) -> InitResult<()> {
                 InitResult::ignore()
             }
 
-            fn handle_call(_: (), _: From, _: &mut ()) -> CallResult<(), ()> {
+            async fn handle_call(_: (), _: From, _: &mut ()) -> CallResult<(), ()> {
                 CallResult::reply((), ())
             }
 
-            fn handle_cast(_: (), _: &mut ()) -> CastResult<()> {
+            async fn handle_cast(_: (), _: &mut ()) -> CastResult<()> {
                 CastResult::noreply(())
             }
 
-            fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
                 CastResult::noreply(())
             }
 
-            fn handle_continue(_: ContinueArg, _: &mut ()) -> ContinueResult<()> {
+            async fn handle_continue(_: ContinueArg, _: &mut ()) -> ContinueResult<()> {
                 CastResult::noreply(())
             }
         }
 
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
 
-        let result = start::<IgnoringServer>(&handle, ()).await;
+        let result = start::<IgnoringServer>(()).await;
         assert!(matches!(result, Err(StartError::Ignore)));
     }
 
@@ -362,6 +353,7 @@ mod tests {
 
         struct TerminatingServer;
 
+        #[async_trait]
         impl GenServer for TerminatingServer {
             type State = i64;
             type InitArg = i64;
@@ -369,11 +361,11 @@ mod tests {
             type Cast = ();
             type Reply = ();
 
-            fn init(v: i64) -> InitResult<i64> {
+            async fn init(v: i64) -> InitResult<i64> {
                 InitResult::ok(v)
             }
 
-            fn handle_call(stop: bool, _: From, state: &mut i64) -> CallResult<i64, ()> {
+            async fn handle_call(stop: bool, _: From, state: &mut i64) -> CallResult<i64, ()> {
                 if stop {
                     CallResult::stop(ExitReason::Normal, (), *state)
                 } else {
@@ -381,41 +373,31 @@ mod tests {
                 }
             }
 
-            fn handle_cast(_: (), state: &mut i64) -> CastResult<i64> {
+            async fn handle_cast(_: (), state: &mut i64) -> CastResult<i64> {
                 CastResult::noreply(*state)
             }
 
-            fn handle_info(_: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+            async fn handle_info(_: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
                 CastResult::noreply(*state)
             }
 
-            fn handle_continue(_: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
+            async fn handle_continue(_: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
                 CastResult::noreply(*state)
             }
 
-            fn terminate(_reason: ExitReason, state: &mut i64) {
+            async fn terminate(_reason: ExitReason, state: &mut i64) {
                 TERMINATED.store(*state, Ordering::SeqCst);
             }
         }
 
-        let runtime = Runtime::new();
-        let handle = runtime.handle();
+        dream_process::global::init();
+        let handle = dream_process::global::handle();
 
-        let server_pid = start::<TerminatingServer>(&handle, 42).await.unwrap();
+        let server_pid = start::<TerminatingServer>(42).await.unwrap();
 
         // Send a call that stops the server
-        let _client_pid = handle.spawn(move |mut ctx| async move {
-            let runtime = Runtime::new();
-            let handle = runtime.handle();
-
-            let _ = call::<TerminatingServer>(
-                &handle,
-                &mut ctx,
-                server_pid,
-                true,
-                Duration::from_secs(5),
-            )
-            .await;
+        let _client_pid = handle.spawn(move || async move {
+            let _ = call::<TerminatingServer>(server_pid, true, Duration::from_secs(5)).await;
         });
 
         sleep(Duration::from_millis(100)).await;

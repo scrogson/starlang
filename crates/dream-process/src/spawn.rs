@@ -5,24 +5,23 @@
 
 use crate::runtime::RuntimeHandle;
 use dream_core::{Pid, Ref};
-use dream_runtime::Context;
 use std::future::Future;
 
 /// Type alias for process functions.
-pub type ProcessFn<Fut> = Box<dyn FnOnce(Context) -> Fut + Send + 'static>;
+pub type ProcessFn<Fut> = Box<dyn FnOnce() -> Fut + Send + 'static>;
 
 /// Spawns a new process using the provided runtime handle.
 ///
 /// # Example
 ///
 /// ```ignore
-/// let pid = spawn(&handle, |ctx| async move {
-///     println!("Hello from process {:?}", ctx.pid());
+/// let pid = spawn(&handle, || async move {
+///     println!("Hello from process {:?}", dream::current_pid());
 /// });
 /// ```
 pub fn spawn<F, Fut>(handle: &RuntimeHandle, f: F) -> Pid
 where
-    F: FnOnce(Context) -> Fut + Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     handle.spawn(f)
@@ -33,13 +32,13 @@ where
 /// # Example
 ///
 /// ```ignore
-/// let child = spawn_link(&handle, parent_pid, |ctx| async move {
+/// let child = spawn_link(&handle, parent_pid, || async move {
 ///     println!("Linked child process");
 /// });
 /// ```
 pub fn spawn_link<F, Fut>(handle: &RuntimeHandle, parent: Pid, f: F) -> Pid
 where
-    F: FnOnce(Context) -> Fut + Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     handle.spawn_link(parent, f)
@@ -52,13 +51,13 @@ where
 /// # Example
 ///
 /// ```ignore
-/// let (child, ref) = spawn_monitor(&handle, monitor_pid, |ctx| async move {
+/// let (child, ref) = spawn_monitor(&handle, monitor_pid, || async move {
 ///     println!("Monitored child process");
 /// });
 /// ```
 pub fn spawn_monitor<F, Fut>(handle: &RuntimeHandle, monitor: Pid, f: F) -> (Pid, Ref)
 where
-    F: FnOnce(Context) -> Fut + Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     handle.spawn_monitor(monitor, f)
@@ -81,7 +80,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
 
-        let _pid = spawn(&handle, move |_ctx| async move {
+        let _pid = spawn(&handle, move || async move {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
@@ -99,7 +98,7 @@ mod tests {
 
         for _ in 0..10 {
             let counter_clone = counter.clone();
-            spawn(&handle, move |_ctx| async move {
+            spawn(&handle, move || async move {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             });
         }

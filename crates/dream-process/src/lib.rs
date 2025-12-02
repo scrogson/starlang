@@ -33,6 +33,7 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+pub mod global;
 mod runtime;
 mod spawn;
 

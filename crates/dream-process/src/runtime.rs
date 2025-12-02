@@ -76,11 +76,12 @@ impl RuntimeHandle {
 
     /// Spawns a new process.
     ///
-    /// The process function receives a [`Context`] and should return a future
-    /// that represents the process's lifetime.
+    /// The process function should return a future that represents the
+    /// process's lifetime. Use task-local functions like `current_pid()`,
+    /// `recv()`, `send()`, etc. to interact with the runtime.
     pub fn spawn<F, Fut>(&self, f: F) -> Pid
     where
-        F: FnOnce(Context) -> Fut + Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.spawn_internal(f, false, false).0
@@ -93,7 +94,7 @@ impl RuntimeHandle {
     /// process context and want to spawn a linked child.
     pub fn spawn_link<F, Fut>(&self, parent_pid: Pid, f: F) -> Pid
     where
-        F: FnOnce(Context) -> Fut + Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         let (child_pid, _) = self.spawn_internal(f, false, false);
@@ -114,7 +115,7 @@ impl RuntimeHandle {
     /// Returns the PID and monitor reference.
     pub fn spawn_monitor<F, Fut>(&self, monitor_pid: Pid, f: F) -> (Pid, Ref)
     where
-        F: FnOnce(Context) -> Fut + Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         let (child_pid, _) = self.spawn_internal(f, false, false);
@@ -134,7 +135,7 @@ impl RuntimeHandle {
     /// Internal spawn implementation.
     fn spawn_internal<F, Fut>(&self, f: F, _link: bool, _monitor: bool) -> (Pid, Option<Ref>)
     where
-        F: FnOnce(Context) -> Fut + Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         let pid = Pid::new();
@@ -149,10 +150,11 @@ impl RuntimeHandle {
         let state_for_task = state.clone();
         let ctx = Context::new(pid, mailbox, state.clone(), registry.clone());
 
-        // Spawn the tokio task
+        // Spawn the tokio task with task-local context
         tokio::spawn(async move {
-            // Run the process
-            f(ctx).await;
+            // ProcessScope sets up task-local storage so functions like
+            // current_pid(), recv(), send(), etc. work
+            dream_runtime::ProcessScope::new(ctx).run(f).await;
 
             // Process completed normally
             Self::handle_process_exit(pid, ExitReason::Normal, &registry, &state_for_task);
@@ -282,7 +284,7 @@ mod tests {
         let executed = Arc::new(AtomicBool::new(false));
         let executed_clone = executed.clone();
 
-        let pid = handle.spawn(move |_ctx| async move {
+        let pid = handle.spawn(move || async move {
             executed_clone.store(true, Ordering::SeqCst);
         });
 
@@ -301,8 +303,8 @@ mod tests {
         let received = Arc::new(AtomicBool::new(false));
         let received_clone = received.clone();
 
-        let pid = handle.spawn(move |mut ctx| async move {
-            if let Some(_msg) = ctx.recv_timeout(Duration::from_millis(100)).await.ok().flatten() {
+        let pid = handle.spawn(move || async move {
+            if let Some(_msg) = dream_runtime::recv_timeout(Duration::from_millis(100)).await.ok().flatten() {
                 received_clone.store(true, Ordering::SeqCst);
             }
         });
@@ -325,11 +327,11 @@ mod tests {
         let parent_received_clone = parent_received_exit.clone();
 
         // Create a "parent" process that traps exits
-        let _parent_pid = handle.spawn(|mut ctx| async move {
-            ctx.set_trap_exit(true);
+        let _parent_pid = handle.spawn(|| async move {
+            dream_runtime::with_ctx(|ctx| ctx.set_trap_exit(true));
             // Wait for exit message
             loop {
-                match ctx.recv_timeout(Duration::from_millis(500)).await {
+                match dream_runtime::recv_timeout(Duration::from_millis(500)).await {
                     Ok(Some(msg)) => {
                         if let Ok(SystemMessage::Exit { .. }) =
                             <SystemMessage as dream_core::Message>::decode(&msg)
@@ -347,7 +349,7 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // Spawn linked child that exits immediately (normal exit)
-        let child_pid = handle.spawn(|_ctx| async move {
+        let child_pid = handle.spawn(|| async move {
             // Just exit normally
         });
 
@@ -367,9 +369,9 @@ mod tests {
         let down_clone = down_received.clone();
 
         // Create monitor process
-        let monitor_pid = handle.spawn(move |mut ctx| async move {
+        let monitor_pid = handle.spawn(move || async move {
             loop {
-                match ctx.recv_timeout(Duration::from_millis(500)).await {
+                match dream_runtime::recv_timeout(Duration::from_millis(500)).await {
                     Ok(Some(msg)) => {
                         // Check if it's a DOWN message
                         if let Ok(SystemMessage::Down { .. }) =
@@ -388,7 +390,7 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // Spawn monitored child
-        let (_child_pid, _ref) = handle.spawn_monitor(monitor_pid, |_ctx| async move {
+        let (_child_pid, _ref) = handle.spawn_monitor(monitor_pid, || async move {
             // Exit immediately
         });
 
@@ -403,9 +405,9 @@ mod tests {
         let runtime = Runtime::new();
         let handle = runtime.handle();
 
-        let pid = handle.spawn(|mut ctx| async move {
+        let pid = handle.spawn(|| async move {
             loop {
-                if ctx.recv_timeout(Duration::from_millis(500)).await.is_err() {
+                if dream_runtime::recv_timeout(Duration::from_millis(500)).await.is_err() {
                     break;
                 }
             }
@@ -415,7 +417,7 @@ mod tests {
         assert_eq!(handle.whereis("my_process"), Some(pid));
 
         // Can't register same name twice
-        let pid2 = handle.spawn(|_ctx| async {});
+        let pid2 = handle.spawn(|| async {});
         assert!(!handle.register("my_process".to_string(), pid2));
 
         // Unregister

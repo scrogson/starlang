@@ -2,11 +2,8 @@
 //!
 //! Each room is a GenServer that manages its members and broadcasts messages.
 
-use crate::protocol::{ServerEvent, RoomInfo};
-use dream_core::Pid;
-use dream_gen_server::{
-    CallResult, CastResult, ContinueArg, ContinueResult, From, GenServer, InfoResult, InitResult,
-};
+use crate::protocol::{RoomInfo, ServerEvent};
+use dream::gen_server::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,7 +24,6 @@ pub struct RoomInit {
     pub name: String,
 }
 
-
 /// Call requests to Room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RoomCall {
@@ -37,7 +33,6 @@ pub enum RoomCall {
     GetMembers,
 }
 
-
 /// Call replies from Room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RoomReply {
@@ -46,7 +41,6 @@ pub enum RoomReply {
     /// List of member nicknames.
     Members(Vec<String>),
 }
-
 
 /// Cast messages to Room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,12 +55,11 @@ pub enum RoomCast {
     UpdateNick { pid: Pid, new_nick: String },
 }
 
-
 /// Internal message type for sending events to user sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserEvent(pub ServerEvent);
 
-
+#[async_trait]
 impl GenServer for Room {
     type State = RoomState;
     type InitArg = RoomInit;
@@ -74,7 +67,7 @@ impl GenServer for Room {
     type Cast = RoomCast;
     type Reply = RoomReply;
 
-    fn init(arg: RoomInit) -> InitResult<RoomState> {
+    async fn init(arg: RoomInit) -> InitResult<RoomState> {
         tracing::info!(room = %arg.name, "Room created");
         InitResult::Ok(RoomState {
             name: arg.name,
@@ -82,7 +75,7 @@ impl GenServer for Room {
         })
     }
 
-    fn handle_call(
+    async fn handle_call(
         request: RoomCall,
         _from: From,
         state: &mut RoomState,
@@ -93,7 +86,6 @@ impl GenServer for Room {
                     name: state.name.clone(),
                     user_count: state.members.len(),
                 };
-                // Clone state for the reply
                 let new_state = RoomState {
                     name: state.name.clone(),
                     members: state.members.clone(),
@@ -111,7 +103,7 @@ impl GenServer for Room {
         }
     }
 
-    fn handle_cast(msg: RoomCast, state: &mut RoomState) -> CastResult<RoomState> {
+    async fn handle_cast(msg: RoomCast, state: &mut RoomState) -> CastResult<RoomState> {
         match msg {
             RoomCast::Join { pid, nick } => {
                 tracing::info!(room = %state.name, nick = %nick, "User joined");
@@ -176,15 +168,14 @@ impl GenServer for Room {
         }
     }
 
-    fn handle_info(_msg: Vec<u8>, state: &mut RoomState) -> InfoResult<RoomState> {
-        // Handle any raw messages (e.g., monitor DOWN messages)
+    async fn handle_info(_msg: Vec<u8>, state: &mut RoomState) -> InfoResult<RoomState> {
         InfoResult::NoReply(RoomState {
             name: state.name.clone(),
             members: state.members.clone(),
         })
     }
 
-    fn handle_continue(_arg: ContinueArg, state: &mut RoomState) -> ContinueResult<RoomState> {
+    async fn handle_continue(_arg: ContinueArg, state: &mut RoomState) -> ContinueResult<RoomState> {
         ContinueResult::NoReply(RoomState {
             name: state.name.clone(),
             members: state.members.clone(),
@@ -194,14 +185,11 @@ impl GenServer for Room {
 
 /// Broadcast an event to all room members except the excluded PID.
 fn broadcast_to_members(state: &RoomState, event: &ServerEvent, exclude: Option<Pid>) {
+    let handle = dream::handle();
     let payload = postcard::to_allocvec(&UserEvent(event.clone())).unwrap();
     for &pid in state.members.keys() {
         if Some(pid) != exclude {
-            // Send directly to the user session process
-            // Note: In a real implementation, we'd use the runtime handle
-            // For now, we just log - actual sending happens via the registry
-            tracing::debug!(pid = ?pid, event = ?event, "Would send to user");
-            let _ = &payload; // Suppress unused warning
+            let _ = handle.registry().send_raw(pid, payload.clone());
         }
     }
 }

@@ -8,7 +8,6 @@ use crate::types::{
 };
 use dream_core::{ExitReason, Message, Pid, Ref, SystemMessage};
 use dream_process::RuntimeHandle;
-use dream_runtime::Context;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -90,7 +89,7 @@ struct SupervisorState {
 
 impl SupervisorState {
     /// Starts a child and monitors it.
-    async fn start_child(&mut self, ctx: &Context, id: &str) -> Result<Pid, String> {
+    async fn start_child(&mut self, id: &str) -> Result<Pid, String> {
         let child = self
             .children
             .get(id)
@@ -101,8 +100,9 @@ impl SupervisorState {
             .await
             .map_err(|e| format!("{}", e))?;
 
-        // Monitor the child
-        let monitor_ref = ctx.monitor(pid).map_err(|e| format!("{}", e))?;
+        // Monitor the child using task-local context
+        let monitor_ref =
+            dream_runtime::with_ctx(|ctx| ctx.monitor(pid)).map_err(|e| format!("{}", e))?;
 
         // Update state
         if let Some(child) = self.children.get_mut(id) {
@@ -115,12 +115,7 @@ impl SupervisorState {
     }
 
     /// Handles a child exit.
-    async fn handle_child_exit(
-        &mut self,
-        ctx: &Context,
-        pid: Pid,
-        reason: ExitReason,
-    ) -> Result<(), ExitReason> {
+    async fn handle_child_exit(&mut self, pid: Pid, reason: ExitReason) -> Result<(), ExitReason> {
         let id = match self.pid_to_id.remove(&pid) {
             Some(id) => id,
             None => return Ok(()), // Not our child
@@ -161,7 +156,7 @@ impl SupervisorState {
         match self.flags.strategy {
             Strategy::OneForOne => {
                 // Just restart this child
-                if let Err(e) = self.start_child(ctx, &id).await {
+                if let Err(e) = self.start_child(&id).await {
                     // Child failed to restart
                     return Err(ExitReason::error(format!(
                         "child '{}' failed to restart: {}",
@@ -171,23 +166,24 @@ impl SupervisorState {
             }
             Strategy::OneForAll => {
                 // Terminate all children, then restart all
-                self.terminate_all_children(ctx).await;
-                self.start_all_children(ctx).await?;
+                self.terminate_all_children().await;
+                self.start_all_children().await?;
             }
             Strategy::RestForOne => {
                 // Find position of failed child
                 let pos = self.child_order.iter().position(|i| i == &id).unwrap_or(0);
 
                 // Collect child IDs to terminate (from pos onwards, in reverse order)
-                let to_terminate: Vec<String> = self.child_order[pos..].iter().rev().cloned().collect();
+                let to_terminate: Vec<String> =
+                    self.child_order[pos..].iter().rev().cloned().collect();
                 for child_id in to_terminate {
-                    self.terminate_child_by_id(ctx, &child_id).await;
+                    self.terminate_child_by_id(&child_id).await;
                 }
 
                 // Collect child IDs to restart (from pos onwards)
                 let to_restart: Vec<String> = self.child_order[pos..].iter().cloned().collect();
                 for child_id in to_restart {
-                    if let Err(e) = self.start_child(ctx, &child_id).await {
+                    if let Err(e) = self.start_child(&child_id).await {
                         return Err(ExitReason::error(format!(
                             "child '{}' failed to restart: {}",
                             child_id, e
@@ -201,26 +197,26 @@ impl SupervisorState {
     }
 
     /// Terminates all children in reverse order.
-    async fn terminate_all_children(&mut self, ctx: &Context) {
+    async fn terminate_all_children(&mut self) {
         let ids: Vec<String> = self.child_order.iter().rev().cloned().collect();
         for id in ids {
-            self.terminate_child_by_id(ctx, &id).await;
+            self.terminate_child_by_id(&id).await;
         }
     }
 
     /// Terminates a specific child by ID.
-    async fn terminate_child_by_id(&mut self, ctx: &Context, id: &str) {
+    async fn terminate_child_by_id(&mut self, id: &str) {
         if let Some(child) = self.children.get_mut(id) {
             if let Some(pid) = child.pid.take() {
                 self.pid_to_id.remove(&pid);
 
-                // Demonitor first
+                // Demonitor first using task-local context
                 if let Some(ref_) = child.monitor_ref.take() {
-                    ctx.demonitor(ref_);
+                    dream_runtime::with_ctx(|ctx| ctx.demonitor(ref_));
                 }
 
-                // Send exit signal
-                let _ = ctx.exit(pid, ExitReason::Shutdown);
+                // Send exit signal using task-local context
+                let _ = dream_runtime::with_ctx(|ctx| ctx.exit(pid, ExitReason::Shutdown));
 
                 // TODO: Wait for child to actually terminate with timeout
             }
@@ -228,9 +224,9 @@ impl SupervisorState {
     }
 
     /// Starts all children in order.
-    async fn start_all_children(&mut self, ctx: &Context) -> Result<(), ExitReason> {
+    async fn start_all_children(&mut self) -> Result<(), ExitReason> {
         for id in self.child_order.clone() {
-            if let Err(e) = self.start_child(ctx, &id).await {
+            if let Err(e) = self.start_child(&id).await {
                 return Err(ExitReason::error(format!(
                     "child '{}' failed to start: {}",
                     id, e
@@ -278,20 +274,20 @@ impl SupervisorState {
 }
 
 /// The main supervisor process loop.
-async fn supervisor_loop(mut ctx: Context, mut state: SupervisorState) {
+async fn supervisor_loop(mut state: SupervisorState) {
     // Start all initial children
-    if let Err(_reason) = state.start_all_children(&ctx).await {
+    if let Err(_reason) = state.start_all_children().await {
         // Failed to start children - supervisor terminates
         return;
     }
 
     // Main message loop
     loop {
-        let msg = match ctx.recv().await {
+        let msg = match dream_runtime::recv().await {
             Some(m) => m,
             None => {
                 // Mailbox closed - terminate children and exit
-                state.terminate_all_children(&ctx).await;
+                state.terminate_all_children().await;
                 return;
             }
         };
@@ -303,17 +299,19 @@ async fn supervisor_loop(mut ctx: Context, mut state: SupervisorState) {
             reason,
         }) = <SystemMessage as Message>::decode(&msg)
         {
-            if let Err(_exit_reason) = state.handle_child_exit(&ctx, pid, reason).await {
+            if let Err(_exit_reason) = state.handle_child_exit(pid, reason).await {
                 // Supervisor needs to stop due to restart intensity
-                state.terminate_all_children(&ctx).await;
+                state.terminate_all_children().await;
                 return;
             }
         }
 
         // Check for exit signals
-        if let Ok(SystemMessage::Exit { from: _, reason: _ }) = <SystemMessage as Message>::decode(&msg) {
+        if let Ok(SystemMessage::Exit { from: _, reason: _ }) =
+            <SystemMessage as Message>::decode(&msg)
+        {
             // If we receive an exit signal, terminate
-            state.terminate_all_children(&ctx).await;
+            state.terminate_all_children().await;
             return;
         }
     }
@@ -330,11 +328,11 @@ pub async fn start_link<S: Supervisor>(
     let init_result = S::init(arg);
 
     let handle_clone = handle.clone();
-    let pid = handle.spawn_link(parent, move |ctx| {
-        let self_pid = ctx.pid();
+    let pid = handle.spawn_link(parent, move || {
+        let self_pid = dream_runtime::current_pid();
 
         // Set up trap_exit so we get exit signals as messages
-        ctx.set_trap_exit(true);
+        dream_runtime::with_ctx(|ctx| ctx.set_trap_exit(true));
 
         let mut children = HashMap::new();
         let mut child_order = Vec::new();
@@ -362,7 +360,7 @@ pub async fn start_link<S: Supervisor>(
             restart_times: Vec::new(),
         };
 
-        supervisor_loop(ctx, state)
+        supervisor_loop(state)
     });
 
     // Give the supervisor time to start
@@ -371,20 +369,25 @@ pub async fn start_link<S: Supervisor>(
     if handle.alive(pid) {
         Ok(pid)
     } else {
-        Err(StartError::InitFailed("supervisor died during init".to_string()))
+        Err(StartError::InitFailed(
+            "supervisor died during init".to_string(),
+        ))
     }
 }
 
 /// Starts a supervisor without linking.
-pub async fn start<S: Supervisor>(handle: &RuntimeHandle, arg: S::InitArg) -> Result<Pid, StartError> {
+pub async fn start<S: Supervisor>(
+    handle: &RuntimeHandle,
+    arg: S::InitArg,
+) -> Result<Pid, StartError> {
     let init_result = S::init(arg);
 
     let handle_clone = handle.clone();
-    let pid = handle.spawn(move |ctx| {
-        let self_pid = ctx.pid();
+    let pid = handle.spawn(move || {
+        let self_pid = dream_runtime::current_pid();
 
         // Set up trap_exit so we get exit signals as messages
-        ctx.set_trap_exit(true);
+        dream_runtime::with_ctx(|ctx| ctx.set_trap_exit(true));
 
         let mut children = HashMap::new();
         let mut child_order = Vec::new();
@@ -412,7 +415,7 @@ pub async fn start<S: Supervisor>(handle: &RuntimeHandle, arg: S::InitArg) -> Re
             restart_times: Vec::new(),
         };
 
-        supervisor_loop(ctx, state)
+        supervisor_loop(state)
     });
 
     // Give the supervisor time to start
@@ -421,7 +424,9 @@ pub async fn start<S: Supervisor>(handle: &RuntimeHandle, arg: S::InitArg) -> Re
     if handle.alive(pid) {
         Ok(pid)
     } else {
-        Err(StartError::InitFailed("supervisor died during init".to_string()))
+        Err(StartError::InitFailed(
+            "supervisor died during init".to_string(),
+        ))
     }
 }
 
@@ -431,7 +436,6 @@ pub async fn start<S: Supervisor>(handle: &RuntimeHandle, arg: S::InitArg) -> Re
 /// use a call/response protocol to query the supervisor.
 pub async fn which_children(
     _handle: &RuntimeHandle,
-    _ctx: &mut Context,
     _sup: Pid,
 ) -> Result<Vec<ChildInfo>, String> {
     // This would need a proper call mechanism
@@ -444,7 +448,6 @@ pub async fn which_children(
 /// Note: This is a simplified implementation.
 pub async fn count_children(
     _handle: &RuntimeHandle,
-    _ctx: &mut Context,
     _sup: Pid,
 ) -> Result<ChildCounts, String> {
     // This would need a proper call mechanism
@@ -456,7 +459,6 @@ pub async fn count_children(
 /// Note: This is a simplified implementation.
 pub async fn terminate_child(
     _handle: &RuntimeHandle,
-    _ctx: &mut Context,
     _sup: Pid,
     _id: &str,
 ) -> Result<(), TerminateError> {
@@ -469,7 +471,6 @@ pub async fn terminate_child(
 /// Note: This is a simplified implementation.
 pub async fn delete_child(
     _handle: &RuntimeHandle,
-    _ctx: &mut Context,
     _sup: Pid,
     _id: &str,
 ) -> Result<(), DeleteError> {

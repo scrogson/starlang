@@ -153,10 +153,11 @@ mod tests {
                     vec![ChildSpec::new("worker", move || {
                         let h = handle_clone.clone();
                         async move {
-                            let pid = h.spawn(|mut ctx| async move {
+                            let pid = h.spawn(|| async move {
                                 // Simple worker that waits for messages
                                 loop {
-                                    match ctx.recv_timeout(Duration::from_secs(60)).await {
+                                    match dream_runtime::recv_timeout(Duration::from_secs(60)).await
+                                    {
                                         Ok(Some(_)) => {}
                                         _ => break,
                                     }
@@ -169,7 +170,9 @@ mod tests {
             }
         }
 
-        let sup_pid = start::<WorkerSupervisor>(&handle, handle.clone()).await.unwrap();
+        let sup_pid = start::<WorkerSupervisor>(&handle, handle.clone())
+            .await
+            .unwrap();
         assert!(handle.alive(sup_pid));
 
         // Give it time to start children

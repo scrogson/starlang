@@ -5,15 +5,18 @@ use crate::protocol::{self, GenServerMessage};
 use crate::types::{
     CallResult, CastResult, ContinueArg, ContinueResult, From, InfoResult, InitResult, ServerRef,
 };
+use async_trait::async_trait;
 use dream_core::{ExitReason, Message, Pid, Ref, SystemMessage};
-use dream_process::RuntimeHandle;
-use dream_runtime::Context;
+use dream_runtime::current_pid;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// The GenServer trait for implementing request/response servers.
 ///
-/// This trait mirrors Elixir's GenServer callbacks.
+/// This trait mirrors Elixir's GenServer callbacks. All callbacks are async.
+/// Task-local functions like `dream::current_pid()`, `dream::recv()`, etc.
+/// are available within callbacks. For runtime operations like spawning
+/// processes, use `dream::handle()`.
 ///
 /// # Type Parameters
 ///
@@ -26,21 +29,18 @@ use tokio::sync::oneshot;
 /// # Example
 ///
 /// ```ignore
-/// use dream_gen_server::{GenServer, InitResult, CallResult, CastResult};
+/// use dream::gen_server::{GenServer, InitResult, CallResult, CastResult};
+/// use async_trait::async_trait;
 ///
 /// struct Counter;
 ///
 /// #[derive(serde::Serialize, serde::Deserialize)]
-/// enum CounterCall {
-///     Get,
-///     Increment,
-/// }
+/// enum CounterCall { Get, Increment }
 ///
 /// #[derive(serde::Serialize, serde::Deserialize)]
-/// enum CounterCast {
-///     Reset,
-/// }
+/// enum CounterCast { Reset }
 ///
+/// #[async_trait]
 /// impl GenServer for Counter {
 ///     type State = i64;
 ///     type InitArg = i64;
@@ -48,11 +48,11 @@ use tokio::sync::oneshot;
 ///     type Cast = CounterCast;
 ///     type Reply = i64;
 ///
-///     fn init(initial: i64) -> InitResult<i64> {
-///         InitResult::ok(initial)
+///     async fn init(arg: i64) -> InitResult<i64> {
+///         InitResult::ok(arg)
 ///     }
 ///
-///     fn handle_call(
+///     async fn handle_call(
 ///         request: CounterCall,
 ///         _from: From,
 ///         state: &mut i64,
@@ -66,14 +66,11 @@ use tokio::sync::oneshot;
 ///         }
 ///     }
 ///
-///     fn handle_cast(msg: CounterCast, state: &mut i64) -> CastResult<i64> {
-///         match msg {
-///             CounterCast::Reset => CastResult::noreply(0),
-///         }
-///     }
+///     // ... other callbacks
 /// }
 /// ```
-pub trait GenServer: Sized + Send + 'static {
+#[async_trait]
+pub trait GenServer: Sized + Send + Sync + 'static {
     /// The server's state type.
     type State: Send + 'static;
     /// Argument passed to the `init` callback.
@@ -87,75 +84,74 @@ pub trait GenServer: Sized + Send + 'static {
 
     /// Initializes the server state.
     ///
-    /// This is called when the server starts.
-    fn init(arg: Self::InitArg) -> InitResult<Self::State>;
+    /// Called when the server starts. Use `dream::current_pid()` to get the
+    /// server's PID, or other task-local functions as needed.
+    async fn init(arg: Self::InitArg) -> InitResult<Self::State>;
 
     /// Handles a synchronous call.
     ///
     /// The `from` parameter can be used for deferred replies.
-    fn handle_call(
+    async fn handle_call(
         request: Self::Call,
         from: From,
         state: &mut Self::State,
     ) -> CallResult<Self::State, Self::Reply>;
 
     /// Handles an asynchronous cast.
-    fn handle_cast(msg: Self::Cast, state: &mut Self::State) -> CastResult<Self::State>;
+    async fn handle_cast(
+        msg: Self::Cast,
+        state: &mut Self::State,
+    ) -> CastResult<Self::State>;
 
     /// Handles other messages (system messages, raw messages, etc.).
-    ///
-    /// This callback must be implemented to handle non-call/cast messages.
-    fn handle_info(msg: Vec<u8>, state: &mut Self::State) -> InfoResult<Self::State>;
+    async fn handle_info(
+        msg: Vec<u8>,
+        state: &mut Self::State,
+    ) -> InfoResult<Self::State>;
 
     /// Handles continue instructions from init/call/cast results.
-    ///
-    /// This callback must be implemented if you use continue results.
-    fn handle_continue(arg: ContinueArg, state: &mut Self::State) -> ContinueResult<Self::State>;
+    async fn handle_continue(
+        arg: ContinueArg,
+        state: &mut Self::State,
+    ) -> ContinueResult<Self::State>;
 
     /// Called when the server is about to terminate.
     ///
     /// The default implementation does nothing.
-    #[allow(unused_variables)]
-    fn terminate(reason: ExitReason, state: &mut Self::State) {}
+    async fn terminate(_reason: ExitReason, _state: &mut Self::State) {}
 }
 
 /// Starts a GenServer without linking to the caller.
 ///
 /// Returns the PID of the started server.
-pub async fn start<G: GenServer>(
-    handle: &RuntimeHandle,
-    arg: G::InitArg,
-) -> Result<Pid, StartError> {
-    start_internal::<G>(handle, arg, false, None).await
+pub async fn start<G: GenServer>(arg: G::InitArg) -> Result<Pid, StartError> {
+    start_internal::<G>(arg, false, None).await
 }
 
 /// Starts a GenServer linked to the calling process.
 ///
 /// Returns the PID of the started server.
-pub async fn start_link<G: GenServer>(
-    handle: &RuntimeHandle,
-    parent: Pid,
-    arg: G::InitArg,
-) -> Result<Pid, StartError> {
-    start_internal::<G>(handle, arg, true, Some(parent)).await
+pub async fn start_link<G: GenServer>(parent: Pid, arg: G::InitArg) -> Result<Pid, StartError> {
+    start_internal::<G>(arg, true, Some(parent)).await
 }
 
 /// Internal start implementation.
 async fn start_internal<G: GenServer>(
-    handle: &RuntimeHandle,
     arg: G::InitArg,
     link: bool,
     parent: Option<Pid>,
 ) -> Result<Pid, StartError> {
+    let handle = dream_process::global::handle();
+
     // Channel for init result
     let (init_tx, init_rx) = oneshot::channel::<Result<(), StartError>>();
 
     let pid = if link {
-        handle.spawn_link(parent.unwrap(), move |ctx| {
-            gen_server_loop::<G>(ctx, arg, Some(init_tx))
+        handle.spawn_link(parent.unwrap(), move || {
+            gen_server_loop::<G>(arg, Some(init_tx))
         })
     } else {
-        handle.spawn(move |ctx| gen_server_loop::<G>(ctx, arg, Some(init_tx)))
+        handle.spawn(move || gen_server_loop::<G>(arg, Some(init_tx)))
     };
 
     // Wait for init result
@@ -168,12 +164,12 @@ async fn start_internal<G: GenServer>(
 
 /// The main GenServer process loop.
 async fn gen_server_loop<G: GenServer>(
-    mut ctx: Context,
     arg: G::InitArg,
     init_tx: Option<oneshot::Sender<Result<(), StartError>>>,
 ) {
+
     // Run init
-    let mut state = match G::init(arg) {
+    let mut state = match G::init(arg).await {
         InitResult::Ok(s) => {
             if let Some(tx) = init_tx {
                 let _ = tx.send(Ok(()));
@@ -184,7 +180,7 @@ async fn gen_server_loop<G: GenServer>(
             if let Some(tx) = init_tx {
                 let _ = tx.send(Ok(()));
             }
-            schedule_timeout(&ctx, timeout);
+            schedule_timeout(timeout);
             s
         }
         InitResult::OkHibernate(s) => {
@@ -198,7 +194,7 @@ async fn gen_server_loop<G: GenServer>(
             if let Some(tx) = init_tx {
                 let _ = tx.send(Ok(()));
             }
-            schedule_continue(&ctx, &arg);
+            schedule_continue(&arg);
             s
         }
         InitResult::Ignore => {
@@ -215,13 +211,13 @@ async fn gen_server_loop<G: GenServer>(
         }
     };
 
-    // Main message loop
+    // Main message loop - use task-local recv
     loop {
-        let msg = match ctx.recv().await {
+        let msg = match dream_runtime::recv().await {
             Some(m) => m,
             None => {
                 // Mailbox closed
-                G::terminate(ExitReason::Normal, &mut state);
+                G::terminate(ExitReason::Normal, &mut state).await;
                 return;
             }
         };
@@ -231,17 +227,17 @@ async fn gen_server_loop<G: GenServer>(
             Ok(GenServerMessage::Call { from, payload }) => {
                 match <G::Call as Message>::decode(&payload) {
                     Ok(request) => {
-                        let result = G::handle_call(request, from, &mut state);
-                        match handle_call_result::<G>(&ctx, result, from, &mut state) {
+                        let result = G::handle_call(request, from, &mut state).await;
+                        match handle_call_result::<G>(result, from, &mut state) {
                             LoopAction::Continue => {}
                             LoopAction::ContinueTimeout(timeout) => {
-                                schedule_timeout(&ctx, timeout);
+                                schedule_timeout(timeout);
                             }
                             LoopAction::ContinueWith(arg) => {
-                                schedule_continue(&ctx, &arg);
+                                schedule_continue(&arg);
                             }
                             LoopAction::Stop(reason) => {
-                                G::terminate(reason, &mut state);
+                                G::terminate(reason, &mut state).await;
                                 return;
                             }
                         }
@@ -254,17 +250,17 @@ async fn gen_server_loop<G: GenServer>(
             Ok(GenServerMessage::Cast { payload }) => {
                 match <G::Cast as Message>::decode(&payload) {
                     Ok(cast_msg) => {
-                        let result = G::handle_cast(cast_msg, &mut state);
+                        let result = G::handle_cast(cast_msg, &mut state).await;
                         match handle_cast_result::<G>(result, &mut state) {
                             LoopAction::Continue => {}
                             LoopAction::ContinueTimeout(timeout) => {
-                                schedule_timeout(&ctx, timeout);
+                                schedule_timeout(timeout);
                             }
                             LoopAction::ContinueWith(arg) => {
-                                schedule_continue(&ctx, &arg);
+                                schedule_continue(&arg);
                             }
                             LoopAction::Stop(reason) => {
-                                G::terminate(reason, &mut state);
+                                G::terminate(reason, &mut state).await;
                                 return;
                             }
                         }
@@ -281,41 +277,41 @@ async fn gen_server_loop<G: GenServer>(
                 if let Some(f) = from {
                     // Reply with :ok before stopping
                     let reply_data = protocol::encode_reply(f.reference, &());
-                    let _ = ctx.send_raw(f.caller, reply_data);
+                    let _ = dream_runtime::send_raw(f.caller, reply_data);
                 }
-                G::terminate(reason, &mut state);
+                G::terminate(reason, &mut state).await;
                 return;
             }
             Ok(GenServerMessage::Timeout) => {
                 // Synthesize a timeout info message
-                let result = G::handle_info(protocol::encode_timeout(), &mut state);
+                let result = G::handle_info(protocol::encode_timeout(), &mut state).await;
                 match handle_cast_result::<G>(result, &mut state) {
                     LoopAction::Continue => {}
                     LoopAction::ContinueTimeout(timeout) => {
-                        schedule_timeout(&ctx, timeout);
+                        schedule_timeout(timeout);
                     }
                     LoopAction::ContinueWith(arg) => {
-                        schedule_continue(&ctx, &arg);
+                        schedule_continue(&arg);
                     }
                     LoopAction::Stop(reason) => {
-                        G::terminate(reason, &mut state);
+                        G::terminate(reason, &mut state).await;
                         return;
                     }
                 }
             }
             Ok(GenServerMessage::Continue { arg }) => {
                 let continue_arg = ContinueArg(arg);
-                let result = G::handle_continue(continue_arg, &mut state);
+                let result = G::handle_continue(continue_arg, &mut state).await;
                 match handle_cast_result::<G>(result, &mut state) {
                     LoopAction::Continue => {}
                     LoopAction::ContinueTimeout(timeout) => {
-                        schedule_timeout(&ctx, timeout);
+                        schedule_timeout(timeout);
                     }
                     LoopAction::ContinueWith(arg) => {
-                        schedule_continue(&ctx, &arg);
+                        schedule_continue(&arg);
                     }
                     LoopAction::Stop(reason) => {
-                        G::terminate(reason, &mut state);
+                        G::terminate(reason, &mut state).await;
                         return;
                     }
                 }
@@ -327,7 +323,7 @@ async fn gen_server_loop<G: GenServer>(
                     match sys_msg {
                         SystemMessage::Exit { from: _, reason } => {
                             // Exit signal received
-                            G::terminate(reason, &mut state);
+                            G::terminate(reason, &mut state).await;
                             return;
                         }
                         SystemMessage::Down {
@@ -336,34 +332,34 @@ async fn gen_server_loop<G: GenServer>(
                             reason: _,
                         } => {
                             // Monitor down - pass to handle_info
-                            let result = G::handle_info(msg, &mut state);
+                            let result = G::handle_info(msg, &mut state).await;
                             match handle_cast_result::<G>(result, &mut state) {
                                 LoopAction::Continue => {}
                                 LoopAction::ContinueTimeout(timeout) => {
-                                    schedule_timeout(&ctx, timeout);
+                                    schedule_timeout(timeout);
                                 }
                                 LoopAction::ContinueWith(arg) => {
-                                    schedule_continue(&ctx, &arg);
+                                    schedule_continue(&arg);
                                 }
                                 LoopAction::Stop(reason) => {
-                                    G::terminate(reason, &mut state);
+                                    G::terminate(reason, &mut state).await;
                                     return;
                                 }
                             }
                         }
                         SystemMessage::Timeout => {
                             // System timeout
-                            let result = G::handle_info(msg, &mut state);
+                            let result = G::handle_info(msg, &mut state).await;
                             match handle_cast_result::<G>(result, &mut state) {
                                 LoopAction::Continue => {}
                                 LoopAction::ContinueTimeout(timeout) => {
-                                    schedule_timeout(&ctx, timeout);
+                                    schedule_timeout(timeout);
                                 }
                                 LoopAction::ContinueWith(arg) => {
-                                    schedule_continue(&ctx, &arg);
+                                    schedule_continue(&arg);
                                 }
                                 LoopAction::Stop(reason) => {
-                                    G::terminate(reason, &mut state);
+                                    G::terminate(reason, &mut state).await;
                                     return;
                                 }
                             }
@@ -371,17 +367,17 @@ async fn gen_server_loop<G: GenServer>(
                     }
                 } else {
                     // Unknown message - pass to handle_info
-                    let result = G::handle_info(msg, &mut state);
+                    let result = G::handle_info(msg, &mut state).await;
                     match handle_cast_result::<G>(result, &mut state) {
                         LoopAction::Continue => {}
                         LoopAction::ContinueTimeout(timeout) => {
-                            schedule_timeout(&ctx, timeout);
+                            schedule_timeout(timeout);
                         }
                         LoopAction::ContinueWith(arg) => {
-                            schedule_continue(&ctx, &arg);
+                            schedule_continue(&arg);
                         }
                         LoopAction::Stop(reason) => {
-                            G::terminate(reason, &mut state);
+                            G::terminate(reason, &mut state).await;
                             return;
                         }
                     }
@@ -401,24 +397,23 @@ enum LoopAction {
 
 /// Handles a CallResult and returns the appropriate loop action.
 fn handle_call_result<G: GenServer>(
-    ctx: &Context,
     result: CallResult<G::State, G::Reply>,
     from: From,
     state: &mut G::State,
 ) -> LoopAction {
     match result {
         CallResult::Reply(reply, new_state) => {
-            send_reply::<G>(ctx, from, &reply);
+            send_reply::<G>(from, &reply);
             *state = new_state;
             LoopAction::Continue
         }
         CallResult::ReplyTimeout(reply, new_state, timeout) => {
-            send_reply::<G>(ctx, from, &reply);
+            send_reply::<G>(from, &reply);
             *state = new_state;
             LoopAction::ContinueTimeout(timeout)
         }
         CallResult::ReplyContinue(reply, new_state, arg) => {
-            send_reply::<G>(ctx, from, &reply);
+            send_reply::<G>(from, &reply);
             *state = new_state;
             LoopAction::ContinueWith(arg)
         }
@@ -435,7 +430,7 @@ fn handle_call_result<G: GenServer>(
             LoopAction::ContinueWith(arg)
         }
         CallResult::Stop(reason, reply, new_state) => {
-            send_reply::<G>(ctx, from, &reply);
+            send_reply::<G>(from, &reply);
             *state = new_state;
             LoopAction::Stop(reason)
         }
@@ -472,81 +467,113 @@ fn handle_cast_result<G: GenServer>(
 }
 
 /// Sends a reply to a caller.
-fn send_reply<G: GenServer>(ctx: &Context, from: From, reply: &G::Reply) {
+fn send_reply<G: GenServer>(from: From, reply: &G::Reply) {
     let reply_data = protocol::encode_reply(from.reference, reply);
-    let _ = ctx.send_raw(from.caller, reply_data);
+    let _ = dream_runtime::send_raw(from.caller, reply_data);
 }
 
 /// Schedules a timeout message.
-fn schedule_timeout(_ctx: &Context, timeout: Duration) {
-    // TODO: Implement timeout scheduling properly
-    // This requires access to the registry to send back to the process
-    // For now, timeouts are scheduled but never delivered
+fn schedule_timeout(timeout: Duration) {
+    let pid = current_pid();
     tokio::spawn(async move {
         tokio::time::sleep(timeout).await;
-        // TODO: Actually send timeout to the process
-        // This requires access to the registry which we don't have here
+        let data = protocol::encode_timeout();
+        let handle = dream_process::global::handle();
+        let _ = handle.registry().send_raw(pid, data);
     });
 }
 
 /// Schedules a continue message.
-fn schedule_continue(ctx: &Context, arg: &ContinueArg) {
+fn schedule_continue(arg: &ContinueArg) {
+    let pid = current_pid();
     let data = protocol::encode_continue(&arg.0);
-    let _ = ctx.send_raw(ctx.pid(), data);
+    let _ = dream_runtime::send_raw(pid, data);
 }
 
 /// Makes a synchronous call to a GenServer.
 ///
-/// Waits for the reply with the given timeout.
+/// Waits for the reply with the given timeout. Uses task-local context.
+/// Only works from within a DREAM process.
+///
+/// Note: This function implements selective receive - it will loop through
+/// incoming messages looking for the matching reply, re-sending any non-matching
+/// messages back to itself to preserve them for later processing.
 pub async fn call<G: GenServer>(
-    handle: &RuntimeHandle,
-    caller_ctx: &mut Context,
     server: impl Into<ServerRef>,
     request: G::Call,
     timeout: Duration,
 ) -> Result<G::Reply, CallError> {
-    let server_pid = resolve_server(handle, server)?;
+    let server_pid = resolve_server(server)?;
+    let self_pid = current_pid();
 
     let reference = Ref::new();
-    let from = From::new(caller_ctx.pid(), reference);
+    let from = From::new(self_pid, reference);
 
-    // Send the call
+    // Send the call using task-local send
     let call_data = protocol::encode_call(from, &request);
-    caller_ctx
-        .send_raw(server_pid, call_data)
-        .map_err(|_| CallError::NotAlive(server_pid))?;
+    dream_runtime::send_raw(server_pid, call_data).map_err(|_| CallError::NotAlive(server_pid))?;
 
-    // Wait for reply
-    match caller_ctx.recv_timeout(timeout).await {
-        Ok(Some(reply_data)) => {
-            // Try to decode as a reply
-            if let Ok(GenServerMessage::Reply {
-                reference: ref_,
-                payload,
-            }) = protocol::decode(&reply_data)
-            {
-                if ref_ == reference {
-                    <G::Reply as Message>::decode(&payload)
-                        .map_err(|_| CallError::Exit(ExitReason::error("decode error")))
+    // Selective receive: loop until we get the matching reply or timeout
+    let start = std::time::Instant::now();
+    let mut stashed_messages: Vec<Vec<u8>> = Vec::new();
+
+    loop {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            // Re-send stashed messages back to ourselves before returning
+            resend_stashed(self_pid, stashed_messages);
+            return Err(CallError::Timeout);
+        }
+
+        match dream_runtime::recv_timeout(remaining).await {
+            Ok(Some(reply_data)) => {
+                // Try to decode as a GenServer reply
+                if let Ok(GenServerMessage::Reply {
+                    reference: ref_,
+                    payload,
+                }) = protocol::decode(&reply_data)
+                {
+                    if ref_ == reference {
+                        // Found our reply! Re-send stashed messages before returning
+                        resend_stashed(self_pid, stashed_messages);
+                        return <G::Reply as Message>::decode(&payload)
+                            .map_err(|_| CallError::Exit(ExitReason::error("decode error")));
+                    } else {
+                        // Reply for a different call - stash it
+                        stashed_messages.push(reply_data);
+                    }
                 } else {
-                    Err(CallError::Exit(ExitReason::error("reference mismatch")))
+                    // Not a GenServer reply - stash it for later processing
+                    stashed_messages.push(reply_data);
                 }
-            } else {
-                Err(CallError::Exit(ExitReason::error("unexpected message")))
+            }
+            Ok(None) => {
+                // Mailbox closed - this shouldn't happen for a live process
+                // This can occur if all senders (ProcessHandle) are dropped
+                resend_stashed(self_pid, stashed_messages);
+                return Err(CallError::Exit(ExitReason::Normal));
+            }
+            Err(()) => {
+                // Timeout on recv - but this is within the overall call timeout
+                // Keep looping until the call timeout expires
+                continue;
             }
         }
-        Ok(None) => Err(CallError::Exit(ExitReason::Normal)),
-        Err(()) => Err(CallError::Timeout),
+    }
+}
+
+/// Re-send stashed messages back to the process using the global handle.
+fn resend_stashed(pid: Pid, messages: Vec<Vec<u8>>) {
+    let handle = dream_process::global::handle();
+    for msg in messages {
+        let _ = handle.registry().send_raw(pid, msg);
     }
 }
 
 /// Sends an asynchronous cast to a GenServer.
-pub fn cast<G: GenServer>(
-    handle: &RuntimeHandle,
-    server: impl Into<ServerRef>,
-    msg: G::Cast,
-) -> Result<(), CallError> {
-    let server_pid = resolve_server(handle, server)?;
+pub fn cast<G: GenServer>(server: impl Into<ServerRef>, msg: G::Cast) -> Result<(), CallError> {
+    let handle = dream_process::global::handle();
+    let server_pid = resolve_server(server)?;
 
     let cast_data = protocol::encode_cast(&msg);
     handle
@@ -558,7 +585,8 @@ pub fn cast<G: GenServer>(
 /// Sends a reply to a pending call.
 ///
 /// This is used for deferred replies when `handle_call` returns `NoReply`.
-pub fn reply<R: Message>(handle: &RuntimeHandle, from: From, reply: R) -> Result<(), CallError> {
+pub fn reply<R: Message>(from: From, reply: R) -> Result<(), CallError> {
+    let handle = dream_process::global::handle();
     let reply_data = protocol::encode_reply(from.reference, &reply);
     handle
         .registry()
@@ -567,26 +595,25 @@ pub fn reply<R: Message>(handle: &RuntimeHandle, from: From, reply: R) -> Result
 }
 
 /// Stops a GenServer.
+///
+/// Uses task-local context. Only works from within a DREAM process.
 pub async fn stop(
-    handle: &RuntimeHandle,
-    caller_ctx: &mut Context,
     server: impl Into<ServerRef>,
     reason: ExitReason,
     timeout: Duration,
 ) -> Result<(), StopError> {
-    let server_pid = resolve_server_stop(handle, server)?;
+    let server_pid = resolve_server_stop(server)?;
+    let self_pid = current_pid();
 
     let reference = Ref::new();
-    let from = From::new(caller_ctx.pid(), reference);
+    let from = From::new(self_pid, reference);
 
-    // Send stop message
+    // Send stop message using task-local send
     let stop_data = protocol::encode_stop(reason, Some(from));
-    caller_ctx
-        .send_raw(server_pid, stop_data)
-        .map_err(|_| StopError::NotAlive(server_pid))?;
+    dream_runtime::send_raw(server_pid, stop_data).map_err(|_| StopError::NotAlive(server_pid))?;
 
     // Wait for acknowledgment
-    match caller_ctx.recv_timeout(timeout).await {
+    match dream_runtime::recv_timeout(timeout).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Ok(()), // Server stopped
         Err(()) => Err(StopError::Timeout),
@@ -594,7 +621,8 @@ pub async fn stop(
 }
 
 /// Resolves a ServerRef to a Pid.
-fn resolve_server(handle: &RuntimeHandle, server: impl Into<ServerRef>) -> Result<Pid, CallError> {
+fn resolve_server(server: impl Into<ServerRef>) -> Result<Pid, CallError> {
+    let handle = dream_process::global::handle();
     match server.into() {
         ServerRef::Pid(pid) => Ok(pid),
         ServerRef::Name(name) => handle
@@ -605,10 +633,8 @@ fn resolve_server(handle: &RuntimeHandle, server: impl Into<ServerRef>) -> Resul
 }
 
 /// Resolves a ServerRef to a Pid for stop operations.
-fn resolve_server_stop(
-    handle: &RuntimeHandle,
-    server: impl Into<ServerRef>,
-) -> Result<Pid, StopError> {
+fn resolve_server_stop(server: impl Into<ServerRef>) -> Result<Pid, StopError> {
+    let handle = dream_process::global::handle();
     match server.into() {
         ServerRef::Pid(pid) => Ok(pid),
         ServerRef::Name(name) => handle

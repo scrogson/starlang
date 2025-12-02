@@ -6,11 +6,9 @@
 //! - Manages room memberships
 
 use crate::protocol::{frame_message, parse_frame, ClientCommand, ServerEvent};
-use crate::registry::{RegistryCall, RegistryReply, Registry};
-use crate::room::{RoomCall, RoomCast, RoomReply, Room};
-use dream_core::Pid;
-use dream_process::RuntimeHandle;
-use dream_runtime::Context;
+use crate::registry::Registry;
+use crate::room::{Room, RoomCall, RoomCast, RoomReply};
+use dream::Pid;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,31 +18,25 @@ use tokio::sync::Mutex;
 
 /// User session state.
 pub struct Session {
-    /// The runtime handle.
-    handle: RuntimeHandle,
     /// TCP stream for this client.
     stream: Arc<Mutex<TcpStream>>,
     /// User's nickname.
     nick: Option<String>,
     /// Rooms the user has joined.
     rooms: HashSet<String>,
-    /// Registry PID.
-    registry_pid: Pid,
 }
 
 impl Session {
-    pub fn new(handle: RuntimeHandle, stream: TcpStream, registry_pid: Pid) -> Self {
+    pub fn new(stream: TcpStream) -> Self {
         Self {
-            handle,
             stream: Arc::new(Mutex::new(stream)),
             nick: None,
             rooms: HashSet::new(),
-            registry_pid,
         }
     }
 
     /// Run the session, processing commands until disconnect.
-    pub async fn run(mut self, ctx: &mut Context) {
+    pub async fn run(mut self) {
         // Send welcome message
         self.send_event(ServerEvent::Welcome {
             message: "Welcome to DREAM Chat! Use /nick <name> to set your nickname.".to_string(),
@@ -58,7 +50,7 @@ impl Session {
             // Try to parse any pending data first
             while let Some((cmd, consumed)) = parse_frame::<ClientCommand>(&pending) {
                 pending.drain(..consumed);
-                if !self.handle_command(cmd, ctx).await {
+                if !self.handle_command(cmd).await {
                     return; // Client quit
                 }
             }
@@ -73,7 +65,7 @@ impl Session {
                         Ok(0) => {
                             // Connection closed
                             tracing::info!(nick = ?self.nick, "Client disconnected");
-                            self.cleanup(ctx).await;
+                            self.cleanup().await;
                             return;
                         }
                         Ok(n) => {
@@ -81,13 +73,13 @@ impl Session {
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Read error");
-                            self.cleanup(ctx).await;
+                            self.cleanup().await;
                             return;
                         }
                     }
                 }
-                // Check for messages from other processes
-                msg = ctx.recv_timeout(Duration::from_millis(10)) => {
+                // Check for messages from other processes using task-local recv
+                msg = dream::recv_timeout(Duration::from_millis(10)) => {
                     drop(guard); // Release lock before processing
                     if let Ok(Some(data)) = msg {
                         // Try to decode as a UserEvent
@@ -101,7 +93,7 @@ impl Session {
     }
 
     /// Handle a client command. Returns false if the client should disconnect.
-    async fn handle_command(&mut self, cmd: ClientCommand, ctx: &mut Context) -> bool {
+    async fn handle_command(&mut self, cmd: ClientCommand) -> bool {
         match cmd {
             ClientCommand::Nick(nick) => {
                 if nick.is_empty() || nick.len() > 32 {
@@ -115,12 +107,11 @@ impl Session {
 
                     // Update nick in all joined rooms
                     for room_name in &self.rooms {
-                        if let Some(room_pid) = self.get_room_pid(room_name, ctx).await {
-                            let _ = dream_gen_server::cast::<Room>(
-                                &self.handle,
+                        if let Some(room_pid) = self.get_room_pid(room_name).await {
+                            let _ = dream::gen_server::cast::<Room>(
                                 room_pid,
                                 RoomCast::UpdateNick {
-                                    pid: ctx.pid(),
+                                    pid: dream::current_pid(),
                                     new_nick: nick.clone(),
                                 },
                             );
@@ -152,14 +143,13 @@ impl Session {
                 }
 
                 // Get or create the room via registry
-                match self.get_or_create_room(&room_name, ctx).await {
+                match self.get_or_create_room(&room_name).await {
                     Some(room_pid) => {
                         // Join the room
-                        let _ = dream_gen_server::cast::<Room>(
-                            &self.handle,
+                        let _ = dream::gen_server::cast::<Room>(
                             room_pid,
                             RoomCast::Join {
-                                pid: ctx.pid(),
+                                pid: dream::current_pid(),
                                 nick: self.nick.clone().unwrap(),
                             },
                         );
@@ -186,11 +176,12 @@ impl Session {
                     return true;
                 }
 
-                if let Some(room_pid) = self.get_room_pid(&room_name, ctx).await {
-                    let _ = dream_gen_server::cast::<Room>(
-                        &self.handle,
+                if let Some(room_pid) = self.get_room_pid(&room_name).await {
+                    let _ = dream::gen_server::cast::<Room>(
                         room_pid,
-                        RoomCast::Leave { pid: ctx.pid() },
+                        RoomCast::Leave {
+                            pid: dream::current_pid(),
+                        },
                     );
                 }
 
@@ -207,12 +198,11 @@ impl Session {
                     return true;
                 }
 
-                if let Some(room_pid) = self.get_room_pid(&room, ctx).await {
-                    let _ = dream_gen_server::cast::<Room>(
-                        &self.handle,
+                if let Some(room_pid) = self.get_room_pid(&room).await {
+                    let _ = dream::gen_server::cast::<Room>(
                         room_pid,
                         RoomCast::Broadcast {
-                            from_pid: ctx.pid(),
+                            from_pid: dream::current_pid(),
                             text,
                         },
                     );
@@ -220,21 +210,14 @@ impl Session {
             }
 
             ClientCommand::ListRooms => {
-                match self.call_registry(RegistryCall::ListRooms, ctx).await {
-                    Some(RegistryReply::Rooms(rooms)) => {
-                        self.send_event(ServerEvent::RoomList { rooms }).await;
-                    }
-                    _ => {
-                        self.send_event(ServerEvent::RoomList { rooms: vec![] }).await;
-                    }
-                }
+                let rooms = Registry::list_rooms().await;
+                self.send_event(ServerEvent::RoomList { rooms }).await;
             }
 
             ClientCommand::ListUsers(room_name) => {
-                if let Some(room_pid) = self.get_room_pid(&room_name, ctx).await {
-                    match dream_gen_server::call::<Room>(
-                        &self.handle,
-                        ctx,
+                if let Some(room_pid) = self.get_room_pid(&room_name).await {
+                    // Use call which uses task-local context
+                    match dream::gen_server::call::<Room>(
                         room_pid,
                         RoomCall::GetMembers,
                         Duration::from_secs(5),
@@ -265,7 +248,7 @@ impl Session {
 
             ClientCommand::Quit => {
                 tracing::info!(nick = ?self.nick, "Client quit");
-                self.cleanup(ctx).await;
+                self.cleanup().await;
                 return false;
             }
         }
@@ -284,52 +267,28 @@ impl Session {
     }
 
     /// Get room PID from registry.
-    async fn get_room_pid(&self, room_name: &str, ctx: &mut Context) -> Option<Pid> {
-        match self
-            .call_registry(RegistryCall::GetRoom(room_name.to_string()), ctx)
-            .await
-        {
-            Some(RegistryReply::Room(pid)) => pid,
-            _ => None,
-        }
+    async fn get_room_pid(&self, room_name: &str) -> Option<Pid> {
+        Registry::get_room(room_name).await
     }
 
     /// Get or create a room via registry.
-    async fn get_or_create_room(&self, room_name: &str, ctx: &mut Context) -> Option<Pid> {
-        match self
-            .call_registry(RegistryCall::GetOrCreateRoom(room_name.to_string()), ctx)
-            .await
-        {
-            Some(RegistryReply::Room(pid)) => pid,
-            _ => None,
-        }
-    }
-
-    /// Call the registry GenServer.
-    async fn call_registry(&self, request: RegistryCall, ctx: &mut Context) -> Option<RegistryReply> {
-        dream_gen_server::call::<Registry>(
-            &self.handle,
-            ctx,
-            self.registry_pid,
-            request,
-            Duration::from_secs(5),
-        )
-        .await
-        .ok()
+    async fn get_or_create_room(&self, room_name: &str) -> Option<Pid> {
+        Registry::get_or_create_room(room_name).await
     }
 
     /// Cleanup when disconnecting.
-    async fn cleanup(&mut self, ctx: &mut Context) {
+    async fn cleanup(&mut self) {
         // Collect room names first to avoid borrow issues
         let rooms: Vec<String> = self.rooms.drain().collect();
 
         // Leave all rooms
         for room_name in rooms {
-            if let Some(room_pid) = self.get_room_pid(&room_name, ctx).await {
-                let _ = dream_gen_server::cast::<Room>(
-                    &self.handle,
+            if let Some(room_pid) = self.get_room_pid(&room_name).await {
+                let _ = dream::gen_server::cast::<Room>(
                     room_pid,
-                    RoomCast::Leave { pid: ctx.pid() },
+                    RoomCast::Leave {
+                        pid: dream::current_pid(),
+                    },
                 );
             }
         }
@@ -337,15 +296,10 @@ impl Session {
 }
 
 /// Spawn a session process for a new connection.
-pub fn spawn_session(
-    handle: &RuntimeHandle,
-    stream: TcpStream,
-    registry_pid: Pid,
-) -> Pid {
-    let handle_clone = handle.clone();
-    handle.spawn(move |ctx| async move {
-        let mut ctx = ctx;
-        let session = Session::new(handle_clone, stream, registry_pid);
-        session.run(&mut ctx).await;
+pub fn spawn_session(stream: TcpStream) -> Pid {
+    dream::spawn(move || async move {
+        // All operations use task-local context via dream::current_pid(), dream::recv(), etc.
+        let session = Session::new(stream);
+        session.run().await;
     })
 }
