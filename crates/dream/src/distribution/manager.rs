@@ -1,17 +1,17 @@
 //! Distribution connection manager.
 //!
 //! Manages connections to remote nodes and routes messages.
+//! Nodes are identified by their name (as an Atom) for globally unique addressing.
 
 use super::monitor::NodeMonitorRegistry;
 use super::protocol::{DistError, DistMessage};
 use super::transport::{QuicConnection, QuicTransport};
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use dream_core::{NodeId, NodeInfo, NodeName, Pid};
+use dream_core::{Atom, NodeInfo, NodeName, Pid};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -28,17 +28,18 @@ struct ConnectedNode {
 /// The distribution manager.
 ///
 /// Handles all node connections and message routing.
+/// Nodes are identified by their name (as an Atom) rather than numeric IDs.
 pub struct DistributionManager {
     /// Our node name.
     node_name: String,
+    /// Our node name as an atom.
+    node_name_atom: Atom,
     /// Our creation number.
     creation: u32,
-    /// Counter for assigning node IDs.
-    next_node_id: AtomicU32,
-    /// Connected nodes by NodeId.
-    nodes: DashMap<u32, ConnectedNode>,
-    /// Node ID lookup by address.
-    addr_to_node: DashMap<SocketAddr, u32>,
+    /// Connected nodes by node name atom.
+    nodes: DashMap<Atom, ConnectedNode>,
+    /// Node name lookup by address.
+    addr_to_node: DashMap<SocketAddr, Atom>,
     /// The QUIC transport (if listening).
     transport: RwLock<Option<Arc<QuicTransport>>>,
     /// Node monitor registry.
@@ -48,10 +49,11 @@ pub struct DistributionManager {
 impl DistributionManager {
     /// Create a new distribution manager.
     pub fn new(node_name: String, creation: u32) -> Self {
+        let node_name_atom = Atom::from_str(&node_name);
         Self {
             node_name,
+            node_name_atom,
             creation,
-            next_node_id: AtomicU32::new(1), // Start at 1, 0 is local
             nodes: DashMap::new(),
             addr_to_node: DashMap::new(),
             transport: RwLock::new(None),
@@ -89,10 +91,12 @@ impl DistributionManager {
     }
 
     /// Connect to a remote node.
-    pub async fn connect_to(&self, addr: SocketAddr) -> Result<NodeId, DistError> {
-        // Check if already connected
-        if let Some(node_id) = self.addr_to_node.get(&addr) {
-            return Err(DistError::AlreadyConnected(NodeId::new(*node_id)));
+    ///
+    /// Returns the remote node's name as an Atom.
+    pub async fn connect_to(&self, addr: SocketAddr) -> Result<Atom, DistError> {
+        // Check if already connected by address
+        if let Some(node_atom) = self.addr_to_node.get(&addr) {
+            return Err(DistError::AlreadyConnected(*node_atom));
         }
 
         // Create a client transport if we don't have one
@@ -114,39 +118,46 @@ impl DistributionManager {
         // Connect
         let connection = transport.connect(addr, "localhost").await?;
 
-        // Perform handshake
-        let (node_id, node_info) = self.perform_handshake(&connection, addr).await?;
+        // Perform handshake - returns the remote node's name
+        let (remote_node_atom, node_info) = self.perform_handshake(&connection, addr).await?;
+
+        // Check if we already have a connection to this node (by different address)
+        if self.nodes.contains_key(&remote_node_atom) {
+            connection.close("duplicate connection");
+            return Err(DistError::AlreadyConnected(remote_node_atom));
+        }
 
         // Create message sender
         let (tx, rx) = mpsc::channel(1024);
 
         // Store connection
         self.nodes.insert(
-            node_id.as_u32(),
+            remote_node_atom,
             ConnectedNode {
                 info: node_info,
                 connection,
                 tx,
             },
         );
-        self.addr_to_node.insert(addr, node_id.as_u32());
+        self.addr_to_node.insert(addr, remote_node_atom);
 
         // Spawn message sender task
-        let node_id_u32 = node_id.as_u32();
+        let node_atom = remote_node_atom;
         tokio::spawn(async move {
-            message_sender_loop(rx, node_id_u32).await;
+            message_sender_loop(rx, node_atom).await;
         });
 
         // Spawn message receiver task
+        let node_atom = remote_node_atom;
         tokio::spawn(async move {
-            message_receiver_loop(node_id_u32).await;
+            message_receiver_loop(node_atom).await;
         });
 
         // Request global registry sync from the new node
-        super::global::global_registry().request_sync(node_id);
+        super::global::global_registry().request_sync(remote_node_atom);
 
-        tracing::info!(%addr, ?node_id, "Connected to remote node");
-        Ok(node_id)
+        tracing::info!(%addr, node = %remote_node_atom, "Connected to remote node");
+        Ok(remote_node_atom)
     }
 
     /// Perform the handshake with a remote node.
@@ -154,7 +165,7 @@ impl DistributionManager {
         &self,
         connection: &QuicConnection,
         addr: SocketAddr,
-    ) -> Result<(NodeId, NodeInfo), DistError> {
+    ) -> Result<(Atom, NodeInfo), DistError> {
         // Send Hello
         let hello = DistMessage::Hello {
             node_name: self.node_name.clone(),
@@ -170,45 +181,45 @@ impl DistributionManager {
             DistMessage::Welcome {
                 node_name,
                 creation,
-                your_node_id: _,  // We don't need our own ID
-                my_node_id,       // This is the ID we should use for the remote node
             } => {
-                let node_id = NodeId::new(my_node_id);
+                let node_atom = Atom::from_str(&node_name);
                 let info = NodeInfo::new(
-                    NodeName::new(node_name),
-                    node_id,
+                    NodeName::new(&node_name),
+                    dream_core::NodeId::local(), // NodeId is just for display now
                     Some(addr),
                     creation,
                 );
-                Ok((node_id, info))
+                Ok((node_atom, info))
             }
             _ => Err(DistError::Handshake("expected Welcome message".to_string())),
         }
     }
 
     /// Disconnect from a node.
-    pub fn disconnect_from(&self, node_id: NodeId) -> Result<(), DistError> {
-        if let Some((_, node)) = self.nodes.remove(&node_id.as_u32()) {
+    pub fn disconnect_from(&self, node_atom: Atom) -> Result<(), DistError> {
+        if let Some((_, node)) = self.nodes.remove(&node_atom) {
             node.connection.close("disconnect requested");
             if let Some(addr) = node.info.addr {
                 self.addr_to_node.remove(&addr);
             }
 
             // Notify monitors
-            self.monitors.notify_node_down(node_id, "disconnect requested".to_string());
+            self.monitors.notify_node_down(node_atom, "disconnect requested".to_string());
 
-            tracing::info!(?node_id, "Disconnected from node");
+            tracing::info!(node = %node_atom, "Disconnected from node");
             Ok(())
         } else {
-            Err(DistError::NotConnected(node_id))
+            Err(DistError::NotConnected(node_atom))
         }
     }
 
     /// Send a message to a remote process.
+    ///
+    /// The PID's node field is an Atom identifying the target node.
     pub fn send_to_remote(&self, pid: Pid, payload: Vec<u8>) -> Result<(), DistError> {
-        let node_id = pid.node();
+        let node_atom = pid.node();
 
-        if let Some(node) = self.nodes.get(&node_id) {
+        if let Some(node) = self.nodes.get(&node_atom) {
             let msg = DistMessage::Send {
                 to: pid,
                 from: dream_runtime::try_current_pid(),
@@ -221,23 +232,18 @@ impl DistributionManager {
             }
             Ok(())
         } else {
-            Err(DistError::NotConnected(NodeId::new(node_id)))
+            Err(DistError::NotConnected(node_atom))
         }
     }
 
     /// Get list of connected nodes.
-    pub fn connected_nodes(&self) -> Vec<NodeId> {
-        self.nodes.iter().map(|r| NodeId::new(*r.key())).collect()
+    pub fn connected_nodes(&self) -> Vec<Atom> {
+        self.nodes.iter().map(|r| *r.key()).collect()
     }
 
     /// Get info about a connected node.
-    pub fn get_node_info(&self, node_id: NodeId) -> Option<NodeInfo> {
-        self.nodes.get(&node_id.as_u32()).map(|n| n.info.clone())
-    }
-
-    /// Allocate a new node ID for an incoming connection.
-    pub fn allocate_node_id(&self) -> NodeId {
-        NodeId::new(self.next_node_id.fetch_add(1, Ordering::SeqCst))
+    pub fn get_node_info(&self, node_atom: Atom) -> Option<NodeInfo> {
+        self.nodes.get(&node_atom).map(|n| n.info.clone())
     }
 
     /// Get the monitor registry.
@@ -246,8 +252,13 @@ impl DistributionManager {
     }
 
     /// Get a node's message sender.
-    pub(crate) fn get_node_tx(&self, node_id: u32) -> Option<mpsc::Sender<DistMessage>> {
-        self.nodes.get(&node_id).map(|n| n.tx.clone())
+    pub(crate) fn get_node_tx(&self, node_atom: Atom) -> Option<mpsc::Sender<DistMessage>> {
+        self.nodes.get(&node_atom).map(|n| n.tx.clone())
+    }
+
+    /// Get our node name atom.
+    pub fn node_name_atom(&self) -> Atom {
+        self.node_name_atom
     }
 }
 
@@ -282,18 +293,21 @@ async fn handle_incoming_connection(
         _ => return Err(DistError::Handshake("expected Hello message".to_string())),
     };
 
-    // Get the manager and allocate a node ID
-    let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
-    let assigned_id = manager.allocate_node_id();
+    let remote_node_atom = Atom::from_str(&remote_name);
 
-    // Send Welcome
-    // - your_node_id: the ID we assigned to the connecting node (for them to know their ID on our side)
-    // - my_node_id: the ID they should use for us (same as their assigned ID, since we use it to route)
+    // Get the manager
+    let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
+
+    // Check if already connected
+    if manager.nodes.contains_key(&remote_node_atom) {
+        connection.close("duplicate connection");
+        return Err(DistError::AlreadyConnected(remote_node_atom));
+    }
+
+    // Send Welcome with just our node name
     let welcome = DistMessage::Welcome {
         node_name: our_node_name,
         creation: our_creation,
-        your_node_id: assigned_id.as_u32(),
-        my_node_id: assigned_id.as_u32(),  // They use the same ID for us as we use for them
     };
     connection.send_message(&welcome).await?;
 
@@ -303,38 +317,38 @@ async fn handle_incoming_connection(
 
     let info = NodeInfo::new(
         NodeName::new(&remote_name),
-        assigned_id,
+        dream_core::NodeId::local(), // NodeId is just for display now
         Some(addr),
         remote_creation,
     );
 
     manager.nodes.insert(
-        assigned_id.as_u32(),
+        remote_node_atom,
         ConnectedNode {
             info,
             connection,
             tx,
         },
     );
-    manager.addr_to_node.insert(addr, assigned_id.as_u32());
+    manager.addr_to_node.insert(addr, remote_node_atom);
 
     // Spawn message handling tasks
-    let node_id = assigned_id.as_u32();
+    let node_atom = remote_node_atom;
     tokio::spawn(async move {
-        message_sender_loop(rx, node_id).await;
+        message_sender_loop(rx, node_atom).await;
     });
 
     // Spawn receiver loop
+    let node_atom = remote_node_atom;
     tokio::spawn(async move {
-        message_receiver_loop(node_id).await;
+        message_receiver_loop(node_atom).await;
     });
 
     // Send our global registry to the new node
-    super::global::global_registry().request_sync(assigned_id);
+    super::global::global_registry().request_sync(remote_node_atom);
 
     tracing::info!(
         remote_name = %remote_name,
-        ?assigned_id,
         "Accepted incoming connection"
     );
 
@@ -342,16 +356,16 @@ async fn handle_incoming_connection(
 }
 
 /// Loop to send messages to a remote node.
-async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_id: u32) {
+async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Atom) {
     while let Some(msg) = rx.recv().await {
         let manager = match DIST_MANAGER.get() {
             Some(m) => m,
             None => break,
         };
 
-        if let Some(node) = manager.nodes.get(&node_id) {
+        if let Some(node) = manager.nodes.get(&node_atom) {
             if let Err(e) = node.connection.send_message(&msg).await {
-                tracing::error!(error = %e, node_id, "Failed to send message");
+                tracing::error!(error = %e, node = %node_atom, "Failed to send message");
                 break;
             }
         } else {
@@ -361,12 +375,12 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_id: u32) 
 
     // Connection closed or error - clean up
     if let Some(manager) = DIST_MANAGER.get() {
-        if let Some((_, node)) = manager.nodes.remove(&node_id) {
+        if let Some((_, node)) = manager.nodes.remove(&node_atom) {
             if let Some(addr) = node.info.addr {
                 manager.addr_to_node.remove(&addr);
             }
             manager.monitors.notify_node_down(
-                NodeId::new(node_id),
+                node_atom,
                 "connection closed".to_string(),
             );
         }
@@ -374,14 +388,14 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_id: u32) 
 }
 
 /// Loop to receive messages from a remote node.
-async fn message_receiver_loop(node_id: u32) {
+async fn message_receiver_loop(node_atom: Atom) {
     loop {
         let manager = match DIST_MANAGER.get() {
             Some(m) => m,
             None => break,
         };
 
-        let connection = match manager.nodes.get(&node_id) {
+        let connection = match manager.nodes.get(&node_atom) {
             Some(node) => {
                 // Accept a stream
                 match node.connection.accept_stream().await {
@@ -396,11 +410,11 @@ async fn message_receiver_loop(node_id: u32) {
         let mut recv = connection;
         match QuicConnection::recv_message(&mut recv).await {
             Ok(msg) => {
-                handle_incoming_message(node_id, msg).await;
+                handle_incoming_message(node_atom, msg).await;
             }
             Err(DistError::ConnectionClosed) => break,
             Err(e) => {
-                tracing::error!(error = %e, node_id, "Error receiving message");
+                tracing::error!(error = %e, node = %node_atom, "Error receiving message");
                 break;
             }
         }
@@ -408,12 +422,12 @@ async fn message_receiver_loop(node_id: u32) {
 
     // Clean up
     if let Some(manager) = DIST_MANAGER.get() {
-        if let Some((_, node)) = manager.nodes.remove(&node_id) {
+        if let Some((_, node)) = manager.nodes.remove(&node_atom) {
             if let Some(addr) = node.info.addr {
                 manager.addr_to_node.remove(&addr);
             }
             manager.monitors.notify_node_down(
-                NodeId::new(node_id),
+                node_atom,
                 "connection closed".to_string(),
             );
         }
@@ -421,24 +435,19 @@ async fn message_receiver_loop(node_id: u32) {
 }
 
 /// Handle an incoming message from a remote node.
-async fn handle_incoming_message(from_node: u32, msg: DistMessage) {
+async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
     match msg {
         DistMessage::Send { to, from: _, payload } => {
-            // The PID will have our node ID from the sender's perspective.
-            // Since both sides use the same node ID for each other, if to.node() == from_node,
-            // then the sender is addressing a process on this node.
-            // We need to translate it back to local (node=0) for delivery.
-            if to.node() != from_node && !to.is_local() {
-                // This PID refers to a process on a different node - shouldn't happen
-                tracing::warn!(?to, from_node, "Received message for PID on different node");
-                return;
-            }
-
-            let local_pid = Pid::from_parts(0, to.id(), to.creation());
-
-            // Deliver to local process
-            if let Some(handle) = dream_process::global::try_handle() {
-                let _ = handle.registry().send_raw(local_pid, payload);
+            // The PID in `to` now contains an Atom for the node.
+            // If it matches our node name, deliver locally.
+            if to.is_local() {
+                // Deliver to local process
+                if let Some(handle) = dream_process::global::try_handle() {
+                    let _ = handle.registry().send_raw(to, payload);
+                }
+            } else {
+                // This message is for a process on another node - shouldn't happen
+                tracing::warn!(?to, from_node = %from_node, "Received message for non-local PID");
             }
         }
         DistMessage::Ping { seq } => {
@@ -450,26 +459,26 @@ async fn handle_incoming_message(from_node: u32, msg: DistMessage) {
             }
         }
         DistMessage::Pong { seq } => {
-            tracing::trace!(seq, from_node, "Received pong");
+            tracing::trace!(seq, from_node = %from_node, "Received pong");
         }
         DistMessage::MonitorNode { requesting_pid } => {
             if let Some(manager) = DIST_MANAGER.get() {
-                manager.monitors.add_remote_monitor(NodeId::new(from_node), requesting_pid);
+                manager.monitors.add_remote_monitor(from_node, requesting_pid);
             }
         }
         DistMessage::DemonitorNode { requesting_pid } => {
             if let Some(manager) = DIST_MANAGER.get() {
-                manager.monitors.remove_remote_monitor(NodeId::new(from_node), requesting_pid);
+                manager.monitors.remove_remote_monitor(from_node, requesting_pid);
             }
         }
         DistMessage::NodeGoingDown { reason } => {
-            tracing::info!(from_node, %reason, "Remote node going down");
+            tracing::info!(from_node = %from_node, %reason, "Remote node going down");
             // The connection will close and trigger cleanup
         }
         DistMessage::GlobalRegistry { payload } => {
             // Handle global registry message
             if let Ok(msg) = postcard::from_bytes::<super::global::GlobalRegistryMessage>(&payload) {
-                super::global::global_registry().handle_message(msg, NodeId::new(from_node));
+                super::global::global_registry().handle_message(msg, from_node);
             }
         }
         _ => {
@@ -482,14 +491,14 @@ async fn handle_incoming_message(from_node: u32, msg: DistMessage) {
 
 /// Connect to a remote node.
 ///
-/// Returns the `NodeId` assigned to the remote node.
+/// Returns the remote node's name as an `Atom`.
 ///
 /// # Example
 ///
 /// ```ignore
-/// let node_id = dream::dist::connect("192.168.1.100:9000").await?;
+/// let node = dream::dist::connect("192.168.1.100:9000").await?;
 /// ```
-pub async fn connect(addr: &str) -> Result<NodeId, DistError> {
+pub async fn connect(addr: &str) -> Result<Atom, DistError> {
     let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
     let socket_addr: SocketAddr = addr
         .parse()
@@ -498,13 +507,13 @@ pub async fn connect(addr: &str) -> Result<NodeId, DistError> {
 }
 
 /// Disconnect from a node.
-pub fn disconnect(node_id: NodeId) -> Result<(), DistError> {
+pub fn disconnect(node: Atom) -> Result<(), DistError> {
     let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
-    manager.disconnect_from(node_id)
+    manager.disconnect_from(node)
 }
 
 /// Get list of connected nodes.
-pub fn nodes() -> Vec<NodeId> {
+pub fn nodes() -> Vec<Atom> {
     DIST_MANAGER
         .get()
         .map(|m| m.connected_nodes())
@@ -512,8 +521,8 @@ pub fn nodes() -> Vec<NodeId> {
 }
 
 /// Get info about a connected node.
-pub fn node_info(node_id: NodeId) -> Option<NodeInfo> {
-    DIST_MANAGER.get().and_then(|m| m.get_node_info(node_id))
+pub fn node_info(node: Atom) -> Option<NodeInfo> {
+    DIST_MANAGER.get().and_then(|m| m.get_node_info(node))
 }
 
 /// Send a message to a remote process.

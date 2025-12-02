@@ -109,7 +109,8 @@ impl GenServer for Room {
 
         match msg {
             RoomCast::Join { pid, nick } => {
-                tracing::info!(room = %state.name, nick = %nick, "User joined");
+                // PIDs are now globally unambiguous - no rewriting needed
+                tracing::info!(room = %state.name, nick = %nick, ?pid, "User joined");
 
                 // Notify existing members (broadcast before subscribing new user)
                 let event = ServerEvent::UserJoined {
@@ -128,6 +129,7 @@ impl GenServer for Room {
                 })
             }
             RoomCast::Leave { pid } => {
+                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.remove(&pid) {
                     tracing::info!(room = %state.name, nick = %nick, "User left");
 
@@ -148,6 +150,7 @@ impl GenServer for Room {
                 })
             }
             RoomCast::Broadcast { from_pid, text } => {
+                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.get(&from_pid) {
                     let event = ServerEvent::Message {
                         room: state.name.clone(),
@@ -163,6 +166,7 @@ impl GenServer for Room {
                 })
             }
             RoomCast::UpdateNick { pid, new_nick } => {
+                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.get_mut(&pid) {
                     *nick = new_nick;
                 }

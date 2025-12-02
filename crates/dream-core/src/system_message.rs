@@ -20,14 +20,14 @@ use serde::{Deserialize, Serialize};
 ///
 /// // Exit signal from a linked process
 /// let exit = SystemMessage::Exit {
-///     from: Pid::from_parts(0, 1, 0),
+///     from: Pid::new(),
 ///     reason: ExitReason::Normal,
 /// };
 ///
 /// // DOWN notification from a monitored process
 /// let down = SystemMessage::Down {
 ///     monitor_ref: Ref::from_raw(42),
-///     pid: Pid::from_parts(0, 2, 0),
+///     pid: Pid::new(),
 ///     reason: ExitReason::Error("crashed".to_string()),
 /// };
 ///
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_exit_message() {
-        let pid = Pid::from_parts(0, 42, 0);
+        let pid = Pid::new();
         let msg = SystemMessage::exit(pid, ExitReason::Normal);
 
         assert!(msg.is_exit());
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn test_down_message() {
         let r = Ref::from_raw(100);
-        let pid = Pid::from_parts(0, 42, 0);
+        let pid = Pid::new();
         let msg = SystemMessage::down(r, pid, ExitReason::Killed);
 
         assert!(!msg.is_exit());
@@ -157,11 +157,13 @@ mod tests {
 
     #[test]
     fn test_serialization() {
+        let pid1 = Pid::new();
+        let pid2 = Pid::new();
         let messages = vec![
-            SystemMessage::exit(Pid::from_parts(0, 1, 0), ExitReason::Normal),
+            SystemMessage::exit(pid1, ExitReason::Normal),
             SystemMessage::down(
                 Ref::from_raw(42),
-                Pid::from_parts(0, 2, 0),
+                pid2,
                 ExitReason::Error("test".into()),
             ),
             SystemMessage::Timeout,

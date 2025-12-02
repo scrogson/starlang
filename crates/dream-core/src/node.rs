@@ -2,20 +2,33 @@
 //!
 //! These types identify nodes in a DREAM cluster:
 //!
-//! - [`NodeId`] - Numeric identifier for a node (u32)
+//! - [`NodeId`] - Numeric identifier for a node (used for display only)
 //! - [`NodeName`] - Human-readable name like "node1@localhost"
 //! - [`NodeInfo`] - Complete node information including connection details
+//!
+//! Node identity is stored as an [`Atom`] for efficient comparison and
+//! globally unambiguous PID addressing.
 
+use dream_atom::Atom;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 
-/// Local node identifier constant.
+/// Local node identifier constant (for display purposes).
 pub const LOCAL_NODE_ID: u32 = 0;
+
+/// The atom representing the local/uninitialized node.
+/// This is used before distribution is initialized.
+static LOCAL_NODE_ATOM: OnceLock<Atom> = OnceLock::new();
 
 /// Global storage for this node's identity.
 static THIS_NODE: OnceLock<NodeIdentity> = OnceLock::new();
+
+/// Get the atom representing "no node" / local node before distribution init.
+fn local_node_atom() -> Atom {
+    *LOCAL_NODE_ATOM.get_or_init(|| Atom::from_str(""))
+}
 
 /// A node identifier.
 ///
@@ -189,8 +202,10 @@ impl NodeInfo {
 /// Set once at startup and never changes.
 #[derive(Clone, Debug)]
 pub struct NodeIdentity {
-    /// This node's name.
+    /// This node's name as a string.
     pub name: NodeName,
+    /// This node's name as an atom (for efficient PID comparison).
+    pub name_atom: Atom,
     /// This node's creation number.
     pub creation: u32,
 }
@@ -208,7 +223,8 @@ pub struct NodeIdentity {
 /// // init_node(NodeName::new("node1@localhost"), 0);
 /// ```
 pub fn init_node(name: NodeName, creation: u32) -> Result<(), NodeIdentity> {
-    THIS_NODE.set(NodeIdentity { name, creation })
+    let name_atom = Atom::from_str(name.as_str());
+    THIS_NODE.set(NodeIdentity { name, name_atom, creation })
 }
 
 /// Get this node's name.
@@ -216,6 +232,14 @@ pub fn init_node(name: NodeName, creation: u32) -> Result<(), NodeIdentity> {
 /// Returns `None` if the node hasn't been initialized with distribution enabled.
 pub fn node_name() -> Option<&'static NodeName> {
     THIS_NODE.get().map(|n| &n.name)
+}
+
+/// Get this node's name as an Atom.
+///
+/// Returns the empty atom if distribution hasn't been initialized.
+/// This is used for PID node field comparison.
+pub fn node_name_atom() -> Atom {
+    THIS_NODE.get().map(|n| n.name_atom).unwrap_or_else(local_node_atom)
 }
 
 /// Get this node's creation number.

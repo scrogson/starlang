@@ -3,13 +3,18 @@
 //! A [`Pid`] uniquely identifies a process within the DREAM runtime. It consists of
 //! three components, matching Erlang's PID format `<node.id.creation>`:
 //!
-//! - **node**: Which node the process belongs to (0 = local node)
+//! - **node**: Which node the process belongs to (as an Atom for global uniqueness)
 //! - **id**: The unique process identifier within that node
 //! - **creation**: Distinguishes PIDs across node restarts
+//!
+//! The node is stored as an [`Atom`] (interned string) so that PIDs are globally
+//! unambiguous - `<node1@localhost.5.0>` means the same thing on any node.
 //!
 //! The creation number prevents stale PIDs from accidentally matching new processes
 //! after a node restart.
 
+use crate::node::node_name_atom;
+use dream_atom::Atom;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -20,15 +25,14 @@ static PID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Current node creation number. Incremented on each node restart.
 static CREATION: AtomicU32 = AtomicU32::new(0);
 
-/// Local node identifier (node 0 is always the local node).
-const LOCAL_NODE: u32 = 0;
-
 /// A process identifier.
 ///
 /// Every process in DREAM has a unique `Pid` that can be used to send messages,
 /// establish links, create monitors, and query process status.
 ///
-/// The format matches Erlang's `<node.id.creation>` convention.
+/// The node is stored as an [`Atom`] (interned string) for global uniqueness.
+/// Display format matches Erlang's `<node.id.creation>` convention, showing
+/// `<0.id.creation>` for local PIDs and `<N.id.creation>` for remote ones.
 ///
 /// # Examples
 ///
@@ -44,8 +48,8 @@ const LOCAL_NODE: u32 = 0;
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Pid {
-    /// Node identifier. 0 is the local node.
-    node: u32,
+    /// Node identifier as an atom (e.g., "node1@localhost").
+    node: Atom,
     /// Unique process identifier within the node.
     id: u64,
     /// Creation number - distinguishes PIDs across node restarts.
@@ -56,6 +60,7 @@ impl Pid {
     /// Creates a new unique process identifier on the local node.
     ///
     /// Each call to `new()` returns a globally unique `Pid`.
+    /// The node is set to the current node's name atom.
     ///
     /// # Examples
     ///
@@ -68,57 +73,51 @@ impl Pid {
     /// ```
     pub fn new() -> Self {
         Self {
-            node: LOCAL_NODE,
+            node: node_name_atom(),
             id: PID_COUNTER.fetch_add(1, Ordering::Relaxed),
             creation: CREATION.load(Ordering::Relaxed),
         }
     }
 
-    /// Creates a `Pid` with specific node, id, and creation values.
+    /// Creates a `Pid` with a specific node atom, id, and creation values.
     ///
     /// This is primarily used for deserialization and testing. In normal usage,
     /// prefer [`Pid::new()`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use dream_core::Pid;
-    ///
-    /// let pid = Pid::from_parts(1, 42, 0);
-    /// assert_eq!(pid.node(), 1);
-    /// assert_eq!(pid.id(), 42);
-    /// assert_eq!(pid.creation(), 0);
-    /// ```
-    pub const fn from_parts(node: u32, id: u64, creation: u32) -> Self {
+    pub fn from_parts_atom(node: Atom, id: u64, creation: u32) -> Self {
         Self { node, id, creation }
     }
 
     /// Creates a remote `Pid` for a process on another node.
     ///
     /// This is used when receiving PIDs from remote nodes during distribution.
-    /// The node ID must be > 0 (0 is reserved for the local node).
     ///
     /// # Examples
     ///
     /// ```
     /// use dream_core::Pid;
+    /// use dream_atom::atom;
     ///
-    /// let remote_pid = Pid::remote(1, 100, 5);
+    /// let remote_pid = Pid::remote("node2@localhost", 100, 5);
     /// assert!(!remote_pid.is_local());
-    /// assert_eq!(remote_pid.node(), 1);
     /// ```
-    pub const fn remote(node: u32, id: u64, creation: u32) -> Self {
-        // Note: We don't enforce node > 0 at compile time, but callers should
-        // only use this for remote PIDs
-        Self { node, id, creation }
+    pub fn remote(node_name: &str, id: u64, creation: u32) -> Self {
+        Self {
+            node: Atom::from_str(node_name),
+            id,
+            creation,
+        }
     }
 
-    /// Returns the node identifier.
-    ///
-    /// A value of 0 indicates the local node.
+    /// Returns the node atom.
     #[inline]
-    pub const fn node(&self) -> u32 {
+    pub fn node(&self) -> Atom {
         self.node
+    }
+
+    /// Returns the node name as a string.
+    #[inline]
+    pub fn node_name(&self) -> String {
+        self.node.as_str()
     }
 
     /// Returns the process identifier within the node.
@@ -136,9 +135,11 @@ impl Pid {
     }
 
     /// Returns `true` if this is a local process.
+    ///
+    /// A PID is local if its node matches the current node's name.
     #[inline]
-    pub const fn is_local(&self) -> bool {
-        self.node == LOCAL_NODE
+    pub fn is_local(&self) -> bool {
+        self.node == node_name_atom()
     }
 }
 
@@ -163,19 +164,30 @@ impl Default for Pid {
 
 impl fmt::Debug for Pid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Pid<{}.{}.{}>", self.node, self.id, self.creation)
+        if self.is_local() {
+            write!(f, "Pid<0.{}.{}>", self.id, self.creation)
+        } else {
+            // Show the node name for remote PIDs
+            write!(f, "Pid<{}.{}.{}>", self.node, self.id, self.creation)
+        }
     }
 }
 
 impl fmt::Display for Pid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<{}.{}.{}>", self.node, self.id, self.creation)
+        if self.is_local() {
+            write!(f, "<0.{}.{}>", self.id, self.creation)
+        } else {
+            // Show the node name for remote PIDs
+            write!(f, "<{}.{}.{}>", self.node, self.id, self.creation)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dream_atom::atom;
 
     #[test]
     fn test_pid_uniqueness() {
@@ -188,31 +200,52 @@ mod tests {
     fn test_pid_local() {
         let pid = Pid::new();
         assert!(pid.is_local());
-        assert_eq!(pid.node(), 0);
     }
 
     #[test]
-    fn test_pid_from_parts() {
-        let pid = Pid::from_parts(5, 100, 2);
-        assert_eq!(pid.node(), 5);
+    fn test_pid_remote() {
+        let pid = Pid::remote("node2@localhost", 100, 2);
+        assert_eq!(pid.node_name(), "node2@localhost");
         assert_eq!(pid.id(), 100);
         assert_eq!(pid.creation(), 2);
         assert!(!pid.is_local());
     }
 
     #[test]
-    fn test_pid_display() {
-        let pid = Pid::from_parts(0, 42, 0);
-        assert_eq!(format!("{}", pid), "<0.42.0>");
-        assert_eq!(format!("{:?}", pid), "Pid<0.42.0>");
+    fn test_pid_from_parts_atom() {
+        let node = atom!("test@host");
+        let pid = Pid::from_parts_atom(node, 42, 1);
+        assert_eq!(pid.node(), node);
+        assert_eq!(pid.id(), 42);
+        assert_eq!(pid.creation(), 1);
+    }
+
+    #[test]
+    fn test_pid_display_local() {
+        let pid = Pid::new();
+        // Local PIDs show as <0.id.creation>
+        let display = format!("{}", pid);
+        assert!(display.starts_with("<0."), "expected local display format, got: {}", display);
+        // Format is <0.id.creation> - verify structure
+        let parts: Vec<&str> = display.trim_matches(|c| c == '<' || c == '>').split('.').collect();
+        assert_eq!(parts.len(), 3, "expected 3 parts in PID display");
+        assert_eq!(parts[0], "0", "expected node 0 for local PID");
+    }
+
+    #[test]
+    fn test_pid_display_remote() {
+        let pid = Pid::remote("node2@host", 42, 0);
+        assert_eq!(format!("{}", pid), "<node2@host.42.0>");
+        assert_eq!(format!("{:?}", pid), "Pid<node2@host.42.0>");
     }
 
     #[test]
     fn test_pid_serialization() {
-        let pid = Pid::from_parts(1, 123, 5);
+        let pid = Pid::remote("node1@localhost", 123, 5);
         let bytes = postcard::to_allocvec(&pid).unwrap();
         let decoded: Pid = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(pid, decoded);
+        assert_eq!(decoded.node_name(), "node1@localhost");
     }
 
     #[test]
@@ -233,8 +266,9 @@ mod tests {
     #[test]
     fn test_creation_distinguishes_pids() {
         // Same node and id but different creation should be different PIDs
-        let pid1 = Pid::from_parts(0, 42, 0);
-        let pid2 = Pid::from_parts(0, 42, 1);
+        let node = atom!("test@host");
+        let pid1 = Pid::from_parts_atom(node, 42, 0);
+        let pid2 = Pid::from_parts_atom(node, 42, 1);
         assert_ne!(pid1, pid2);
     }
 

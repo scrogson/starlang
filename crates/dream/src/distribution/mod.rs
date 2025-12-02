@@ -13,6 +13,12 @@
 //! - **Monitor**: Node-level monitoring for fault detection
 //! - **Discovery**: Pluggable node discovery (trait-based)
 //!
+//! # Node Identification
+//!
+//! Nodes are identified by their name (as an `Atom`), not by numeric IDs.
+//! This makes PIDs globally unambiguous - a PID like `<node2@localhost.5.0>`
+//! means the same thing on any node.
+//!
 //! # Quick Start
 //!
 //! ```ignore
@@ -22,7 +28,7 @@
 //! dist::listen("0.0.0.0:9000").await?;
 //!
 //! // Connect to another node
-//! let node_id = dist::connect("192.168.1.100:9000").await?;
+//! let node = dist::connect("192.168.1.100:9000").await?;
 //!
 //! // Send to a remote process (transparent - just use the PID)
 //! dream::send_raw(remote_pid, message);

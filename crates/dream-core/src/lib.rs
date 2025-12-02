@@ -4,6 +4,7 @@
 //!
 //! This crate provides the foundational types used throughout the DREAM ecosystem:
 //!
+//! - [`Atom`] - Interned string for efficient comparison
 //! - [`Pid`] - Process identifier
 //! - [`Ref`] - Unique reference for monitors and timers
 //! - [`ExitReason`] - Process termination reasons
@@ -20,6 +21,9 @@ pub mod node;
 mod pid;
 mod reference;
 mod system_message;
+
+// Re-export Atom from dream-atom for convenience
+pub use dream_atom::{atom, Atom};
 
 pub use exit_reason::ExitReason;
 pub use message::{DecodeError, Message};

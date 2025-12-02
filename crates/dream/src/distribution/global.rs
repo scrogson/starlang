@@ -9,11 +9,17 @@
 //! - Each node maintains a local cache of global registrations
 //! - Lookups check the local cache first
 //! - The owning node is authoritative for a name
+//!
+//! # PID Routing
+//!
+//! PIDs now contain the node name as an Atom, so they are globally unambiguous.
+//! No PID rewriting is needed - a PID like `<node2@localhost.5.0>` means the
+//! same thing on any node.
 
 use super::protocol::DistMessage;
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use dream_core::{NodeId, Pid};
+use dream_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -98,27 +104,23 @@ impl GlobalRegistry {
     }
 
     /// Handle an incoming global registry message from another node.
-    pub fn handle_message(&self, msg: GlobalRegistryMessage, from_node: NodeId) {
+    ///
+    /// PIDs are now globally unambiguous (they contain the node name as an Atom),
+    /// so no rewriting is needed.
+    pub fn handle_message(&self, msg: GlobalRegistryMessage, from_node: Atom) {
         match msg {
             GlobalRegistryMessage::Register { name, pid } => {
-                // Rewrite the PID's node field to reflect the sender's node ID
-                // PIDs are created with node=0 (local), but when received from
-                // another node, we need to tag them with the sender's node ID
-                let remote_pid = if pid.is_local() {
-                    Pid::from_parts(from_node.as_u32(), pid.id(), pid.creation())
-                } else {
-                    pid
-                };
-                tracing::debug!(%name, original_pid = ?pid, remote_pid = ?remote_pid, ?from_node, "Received global register");
+                // PIDs are now globally unambiguous - no rewriting needed
+                tracing::debug!(%name, ?pid, from_node = %from_node, "Received global register");
                 // Only accept if not already registered locally with a different PID
-                self.names.entry(name).or_insert(remote_pid);
+                self.names.entry(name).or_insert(pid);
             }
             GlobalRegistryMessage::Unregister { name } => {
-                tracing::debug!(%name, ?from_node, "Received global unregister");
+                tracing::debug!(%name, from_node = %from_node, "Received global unregister");
                 self.names.remove(&name);
             }
             GlobalRegistryMessage::SyncRequest => {
-                tracing::debug!(?from_node, "Received global sync request");
+                tracing::debug!(from_node = %from_node, "Received global sync request");
                 // Send our registrations to the requesting node
                 let entries: Vec<(String, Pid)> = self
                     .names
@@ -127,7 +129,7 @@ impl GlobalRegistry {
                     .collect();
 
                 if let Some(manager) = DIST_MANAGER.get() {
-                    if let Some(tx) = manager.get_node_tx(from_node.as_u32()) {
+                    if let Some(tx) = manager.get_node_tx(from_node) {
                         let msg = GlobalRegistryMessage::SyncResponse { entries };
                         if let Ok(payload) = postcard::to_allocvec(&msg) {
                             let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
@@ -136,17 +138,12 @@ impl GlobalRegistry {
                 }
             }
             GlobalRegistryMessage::SyncResponse { entries } => {
-                tracing::debug!(count = entries.len(), ?from_node, "Received global sync response");
+                tracing::debug!(count = entries.len(), from_node = %from_node, "Received global sync response");
                 // Merge remote registrations into our cache
+                // PIDs are globally unambiguous - no rewriting needed
                 for (name, pid) in entries {
-                    // Rewrite PID's node field to reflect sender
-                    let remote_pid = if pid.is_local() {
-                        Pid::from_parts(from_node.as_u32(), pid.id(), pid.creation())
-                    } else {
-                        pid
-                    };
-                    tracing::debug!(%name, original_pid = ?pid, remote_pid = ?remote_pid, "Merging global entry");
-                    self.names.entry(name).or_insert(remote_pid);
+                    tracing::debug!(%name, ?pid, "Merging global entry");
+                    self.names.entry(name).or_insert(pid);
                 }
             }
         }
@@ -174,8 +171,8 @@ impl GlobalRegistry {
         if let Some(manager) = DIST_MANAGER.get() {
             if let Ok(payload) = postcard::to_allocvec(msg) {
                 let dist_msg = DistMessage::GlobalRegistry { payload };
-                for node_id in manager.connected_nodes() {
-                    if let Some(tx) = manager.get_node_tx(node_id.as_u32()) {
+                for node_atom in manager.connected_nodes() {
+                    if let Some(tx) = manager.get_node_tx(node_atom) {
                         let _ = tx.try_send(dist_msg.clone());
                     }
                 }
@@ -184,9 +181,9 @@ impl GlobalRegistry {
     }
 
     /// Request sync from a newly connected node.
-    pub fn request_sync(&self, node_id: NodeId) {
+    pub fn request_sync(&self, node_atom: Atom) {
         if let Some(manager) = DIST_MANAGER.get() {
-            if let Some(tx) = manager.get_node_tx(node_id.as_u32()) {
+            if let Some(tx) = manager.get_node_tx(node_atom) {
                 // Ask them to send their registry to us
                 let msg = GlobalRegistryMessage::SyncRequest;
                 if let Ok(payload) = postcard::to_allocvec(&msg) {

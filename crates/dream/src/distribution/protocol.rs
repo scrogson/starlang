@@ -2,7 +2,7 @@
 //!
 //! Defines the message types sent between nodes.
 
-use dream_core::{NodeId, Pid};
+use dream_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -26,10 +26,6 @@ pub enum DistMessage {
         node_name: String,
         /// The receiving node's creation number.
         creation: u32,
-        /// The NodeId assigned to the connecting node (for the connecting node to tell us about itself).
-        your_node_id: u32,
-        /// The NodeId the connecting node should use for this node (the welcoming node).
-        my_node_id: u32,
     },
 
     // === Messaging ===
@@ -105,7 +101,7 @@ pub enum DistError {
     /// Connection failed.
     Connect(String),
     /// Not connected to the specified node.
-    NotConnected(NodeId),
+    NotConnected(Atom),
     /// Distribution not initialized.
     NotInitialized,
     /// Address parsing failed.
@@ -117,7 +113,7 @@ pub enum DistError {
     /// Handshake failed.
     Handshake(String),
     /// Node already connected.
-    AlreadyConnected(NodeId),
+    AlreadyConnected(Atom),
     /// Connection closed.
     ConnectionClosed,
 }
@@ -128,13 +124,13 @@ impl fmt::Display for DistError {
             DistError::Encode(e) => write!(f, "encode error: {}", e),
             DistError::Decode(e) => write!(f, "decode error: {}", e),
             DistError::Connect(e) => write!(f, "connection error: {}", e),
-            DistError::NotConnected(id) => write!(f, "not connected to node {}", id),
+            DistError::NotConnected(node) => write!(f, "not connected to node {}", node),
             DistError::NotInitialized => write!(f, "distribution not initialized"),
             DistError::InvalidAddress(e) => write!(f, "invalid address: {}", e),
             DistError::Tls(e) => write!(f, "TLS error: {}", e),
             DistError::Io(e) => write!(f, "I/O error: {}", e),
             DistError::Handshake(e) => write!(f, "handshake failed: {}", e),
-            DistError::AlreadyConnected(id) => write!(f, "already connected to node {}", id),
+            DistError::AlreadyConnected(node) => write!(f, "already connected to node {}", node),
             DistError::ConnectionClosed => write!(f, "connection closed"),
         }
     }
