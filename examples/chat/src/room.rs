@@ -1,10 +1,10 @@
 //! Chat room implementation using GenServer.
 //!
 //! Each room is a GenServer that manages its members and broadcasts messages.
-//! Uses `pg` (process groups) for distributed room membership.
+//! Uses PubSub (Registry + pg) for distributed room membership.
 
 use crate::protocol::{RoomInfo, ServerEvent};
-use dream::dist::pg;
+use crate::pubsub::PubSub;
 use dream::gen_server::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -107,7 +107,7 @@ impl GenServer for Room {
     }
 
     async fn handle_cast(msg: RoomCast, state: &mut RoomState) -> CastResult<RoomState> {
-        let group = room_group(&state.name);
+        let topic = room_topic(&state.name);
 
         match msg {
             RoomCast::Join { pid, nick } => {
@@ -118,10 +118,10 @@ impl GenServer for Room {
                     room: state.name.clone(),
                     nick: nick.clone(),
                 };
-                broadcast_to_group(&group, &UserEvent(event));
+                PubSub::broadcast(&topic, &UserEvent(event));
 
-                // Join the pg group for this room
-                pg::join(&group, pid);
+                // Subscribe to room topic via PubSub
+                PubSub::subscribe_pid(&topic, pid);
                 state.members.insert(pid, nick);
 
                 CastResult::NoReply(RoomState {
@@ -133,15 +133,15 @@ impl GenServer for Room {
                 if let Some(nick) = state.members.remove(&pid) {
                     tracing::info!(room = %state.name, nick = %nick, "User left");
 
-                    // Leave the pg group
-                    pg::leave(&group, pid);
+                    // Unsubscribe from room topic
+                    PubSub::unsubscribe_pid(&topic, pid);
 
                     // Notify remaining members
                     let event = ServerEvent::UserLeft {
                         room: state.name.clone(),
                         nick,
                     };
-                    broadcast_to_group(&group, &UserEvent(event));
+                    PubSub::broadcast(&topic, &UserEvent(event));
                 }
 
                 CastResult::NoReply(RoomState {
@@ -156,7 +156,7 @@ impl GenServer for Room {
                         from: nick.clone(),
                         text,
                     };
-                    broadcast_to_group(&group, &UserEvent(event));
+                    PubSub::broadcast(&topic, &UserEvent(event));
                 }
 
                 CastResult::NoReply(RoomState {
@@ -192,17 +192,7 @@ impl GenServer for Room {
     }
 }
 
-/// Generate the pg group name for a room.
-fn room_group(room_name: &str) -> String {
+/// Generate the PubSub topic name for a room.
+fn room_topic(room_name: &str) -> String {
     format!("room:{}", room_name)
-}
-
-/// Broadcast a message to all members of a pg group.
-fn broadcast_to_group<M: Serialize>(group: &str, message: &M) {
-    let members = pg::get_members(group);
-    if let Ok(payload) = postcard::to_allocvec(message) {
-        for pid in members {
-            let _ = dream::send_raw(pid, payload.clone());
-        }
-    }
 }

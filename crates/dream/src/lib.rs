@@ -117,6 +117,11 @@
 #[allow(dead_code)]
 pub mod distribution;
 
+/// Local process registry with pub/sub support.
+///
+/// See [`registry`] module for details.
+pub mod registry;
+
 /// Distribution module for connecting DREAM nodes.
 ///
 /// See [`distribution`] module for details.

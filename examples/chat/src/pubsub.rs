@@ -1,8 +1,17 @@
-//! PubSub implementation using pg (process groups).
+//! PubSub implementation using Registry + pg.
 //!
-//! A simple publish-subscribe system similar to Phoenix.PubSub.
-//! Under the hood, it uses `pg` for distributed process groups,
-//! making subscriptions automatically work across nodes.
+//! A publish-subscribe system similar to Phoenix.PubSub.
+//! Uses a local Registry for efficient local dispatch and
+//! `pg` for distributed process group membership.
+//!
+//! # Architecture
+//!
+//! - **Registry**: Handles local subscriptions with fast dispatch
+//! - **pg**: Handles cross-node group membership for discovering remote subscribers
+//!
+//! When broadcasting:
+//! 1. Use Registry to dispatch to local subscribers (efficient, no serialization)
+//! 2. Use pg to find and send to remote subscribers
 //!
 //! # Example
 //!
@@ -23,14 +32,24 @@
 //! ```
 
 use dream::dist::pg;
+use dream::registry::Registry;
 use dream_core::Pid;
 use serde::Serialize;
+use std::sync::{Arc, OnceLock};
+
+/// Global local registry for pub/sub subscriptions.
+static LOCAL_REGISTRY: OnceLock<Arc<Registry<String, ()>>> = OnceLock::new();
+
+/// Get or initialize the local registry.
+fn local_registry() -> &'static Arc<Registry<String, ()>> {
+    LOCAL_REGISTRY.get_or_init(|| Registry::new_duplicate("pubsub"))
+}
 
 /// PubSub client API.
 ///
-/// This is a stateless API that uses `pg` under the hood.
-/// No GenServer process is needed - subscriptions are handled
-/// directly by the distributed process groups.
+/// Uses Registry for local subscriptions and pg for distribution.
+/// This provides efficient local dispatch while maintaining
+/// cross-node pub/sub capabilities.
 pub struct PubSub;
 
 impl PubSub {
@@ -40,7 +59,18 @@ impl PubSub {
     }
 
     /// Subscribe a specific PID to a topic.
+    ///
+    /// This registers the PID in pg for distribution, and in the local
+    /// Registry only if the PID is local (for efficient local dispatch).
     pub fn subscribe_pid(topic: &str, pid: Pid) {
+        // Only register in local Registry if the PID is actually local
+        // This prevents double-delivery when broadcasting
+        if pid.is_local() {
+            let topic_key = topic.to_string();
+            let _ = local_registry().register(topic_key, pid, ());
+        }
+
+        // Join pg group for cross-node discovery
         pg::join(Self::topic_to_group(topic), pid);
     }
 
@@ -51,14 +81,22 @@ impl PubSub {
 
     /// Unsubscribe a specific PID from a topic.
     pub fn unsubscribe_pid(topic: &str, pid: Pid) {
+        // Remove from local registry only if local
+        if pid.is_local() {
+            let topic_key = topic.to_string();
+            local_registry().unregister(&topic_key, pid);
+        }
+
+        // Leave pg group
         pg::leave(&Self::topic_to_group(topic), pid);
     }
 
     /// Unsubscribe a PID from all topics.
-    ///
-    /// Note: This removes the PID from all pg groups,
-    /// including non-pubsub groups.
     pub fn unsubscribe_all(pid: Pid) {
+        // Remove from local registry
+        local_registry().unregister_all(pid);
+
+        // Leave all pg groups
         pg::leave_all(pid);
     }
 
@@ -78,16 +116,43 @@ impl PubSub {
     }
 
     /// Internal: broadcast to all subscribers.
+    ///
+    /// Uses Registry for local dispatch (efficient) and pg for remote.
     fn do_broadcast<M: Serialize>(topic: &str, message: &M, exclude: Option<Pid>) {
-        let group = Self::topic_to_group(topic);
-        let members = pg::get_members(&group);
+        let topic_key = topic.to_string();
 
-        if let Ok(payload) = postcard::to_allocvec(message) {
-            for pid in members {
-                if Some(pid) != exclude {
-                    let _ = dream::send_raw(pid, payload.clone());
+        // Serialize once for all sends
+        let payload = match postcard::to_allocvec(message) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // Use Registry dispatch for local subscribers (efficient)
+        local_registry().dispatch(&topic_key, |entries| {
+            for (pid, _) in entries {
+                if Some(*pid) != exclude {
+                    let _ = dream::send_raw(*pid, payload.clone());
                 }
             }
+        });
+
+        // For remote subscribers, we need to check pg for members not in local registry
+        // pg::get_members returns all members (local + remote)
+        // We only want to send to remote members here since local was handled above
+        let group = Self::topic_to_group(topic);
+        let all_members = pg::get_members(&group);
+        let local_members = pg::get_local_members(&group);
+
+        for pid in all_members {
+            // Skip local members (already handled by Registry dispatch)
+            if local_members.contains(&pid) {
+                continue;
+            }
+            // Skip excluded PID
+            if Some(pid) == exclude {
+                continue;
+            }
+            let _ = dream::send_raw(pid, payload.clone());
         }
     }
 
@@ -98,15 +163,21 @@ impl PubSub {
 
     /// Get only local subscribers for a topic.
     pub fn local_subscribers(topic: &str) -> Vec<Pid> {
-        pg::get_local_members(&Self::topic_to_group(topic))
+        local_registry()
+            .lookup(&topic.to_string())
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect()
     }
 
-    /// Get all topics (actually all pg groups with pubsub prefix).
+    /// Get all topics.
     pub fn topics() -> Vec<String> {
-        pg::all_groups()
-            .into_iter()
-            .filter_map(|g| g.strip_prefix("pubsub:").map(String::from))
-            .collect()
+        local_registry().all_keys()
+    }
+
+    /// Get the count of subscribers for a topic (local only).
+    pub fn count(topic: &str) -> usize {
+        local_registry().count(&topic.to_string())
     }
 
     /// Convert a topic name to a pg group name.
