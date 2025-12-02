@@ -5,6 +5,7 @@
 //! - GenServers for rooms and registry
 //! - Message passing between processes
 //! - **Distribution**: Connect multiple chat servers together
+//! - **pg**: Distributed process groups for room membership
 //!
 //! # Usage
 //!
@@ -33,6 +34,10 @@ mod registry;
 mod room;
 mod server;
 mod session;
+
+// PubSub is now stateless (uses pg under the hood), so we don't need to export it
+#[allow(unused_imports)]
+use pubsub::PubSub;
 
 use clap::Parser;
 use server::{run_acceptor, ServerConfig};
@@ -104,10 +109,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Start the PubSub server
-    let pubsub_pid = pubsub::PubSub::start().await.expect("Failed to start pubsub");
-    dream::register(pubsub::PubSub::NAME, pubsub_pid);
-    tracing::info!(pid = ?pubsub_pid, "PubSub started and registered");
+    // PubSub is now stateless (uses pg under the hood)
+    // No need to start a GenServer
 
     // Start the room registry and register it by name
     let registry_pid = registry::Registry::start().await.expect("Failed to start registry");

@@ -39,6 +39,7 @@ pub mod global;
 mod manager;
 mod monitor;
 mod node;
+pub mod pg;
 mod protocol;
 mod transport;
 

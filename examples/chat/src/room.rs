@@ -1,9 +1,10 @@
 //! Chat room implementation using GenServer.
 //!
 //! Each room is a GenServer that manages its members and broadcasts messages.
+//! Uses `pg` (process groups) for distributed room membership.
 
 use crate::protocol::{RoomInfo, ServerEvent};
-use crate::pubsub::PubSub;
+use dream::dist::pg;
 use dream::gen_server::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ pub struct RoomState {
     /// Room name.
     pub name: String,
     /// Members: PID -> nickname.
+    /// This is the authoritative list of nicknames for members.
     pub members: HashMap<Pid, String>,
 }
 
@@ -105,22 +107,21 @@ impl GenServer for Room {
     }
 
     async fn handle_cast(msg: RoomCast, state: &mut RoomState) -> CastResult<RoomState> {
-        let topic = room_topic(&state.name);
+        let group = room_group(&state.name);
 
         match msg {
             RoomCast::Join { pid, nick } => {
-                // PIDs are now globally unambiguous - no rewriting needed
                 tracing::info!(room = %state.name, nick = %nick, ?pid, "User joined");
 
-                // Notify existing members (broadcast before subscribing new user)
+                // Notify existing members (broadcast before adding new user)
                 let event = ServerEvent::UserJoined {
                     room: state.name.clone(),
                     nick: nick.clone(),
                 };
-                PubSub::broadcast(&topic, &UserEvent(event));
+                broadcast_to_group(&group, &UserEvent(event));
 
-                // Now subscribe the new member to room events
-                PubSub::subscribe_pid(&topic, pid);
+                // Join the pg group for this room
+                pg::join(&group, pid);
                 state.members.insert(pid, nick);
 
                 CastResult::NoReply(RoomState {
@@ -129,19 +130,18 @@ impl GenServer for Room {
                 })
             }
             RoomCast::Leave { pid } => {
-                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.remove(&pid) {
                     tracing::info!(room = %state.name, nick = %nick, "User left");
 
-                    // Unsubscribe from room events
-                    PubSub::unsubscribe_pid(&topic, pid);
+                    // Leave the pg group
+                    pg::leave(&group, pid);
 
                     // Notify remaining members
                     let event = ServerEvent::UserLeft {
                         room: state.name.clone(),
                         nick,
                     };
-                    PubSub::broadcast(&topic, &UserEvent(event));
+                    broadcast_to_group(&group, &UserEvent(event));
                 }
 
                 CastResult::NoReply(RoomState {
@@ -150,14 +150,13 @@ impl GenServer for Room {
                 })
             }
             RoomCast::Broadcast { from_pid, text } => {
-                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.get(&from_pid) {
                     let event = ServerEvent::Message {
                         room: state.name.clone(),
                         from: nick.clone(),
                         text,
                     };
-                    PubSub::broadcast(&topic, &UserEvent(event));
+                    broadcast_to_group(&group, &UserEvent(event));
                 }
 
                 CastResult::NoReply(RoomState {
@@ -166,7 +165,6 @@ impl GenServer for Room {
                 })
             }
             RoomCast::UpdateNick { pid, new_nick } => {
-                // PIDs are now globally unambiguous - no rewriting needed
                 if let Some(nick) = state.members.get_mut(&pid) {
                     *nick = new_nick;
                 }
@@ -194,7 +192,17 @@ impl GenServer for Room {
     }
 }
 
-/// Generate the PubSub topic for a room.
-fn room_topic(room_name: &str) -> String {
+/// Generate the pg group name for a room.
+fn room_group(room_name: &str) -> String {
     format!("room:{}", room_name)
+}
+
+/// Broadcast a message to all members of a pg group.
+fn broadcast_to_group<M: Serialize>(group: &str, message: &M) {
+    let members = pg::get_members(group);
+    if let Ok(payload) = postcard::to_allocvec(message) {
+        for pid in members {
+            let _ = dream::send_raw(pid, payload.clone());
+        }
+    }
 }

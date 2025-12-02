@@ -77,6 +77,13 @@ pub enum DistMessage {
         /// Serialized GlobalRegistryMessage.
         payload: Vec<u8>,
     },
+
+    // === Process Groups (pg) ===
+    /// Process groups synchronization message.
+    ProcessGroups {
+        /// Serialized PgMessage.
+        payload: Vec<u8>,
+    },
 }
 
 impl DistMessage {

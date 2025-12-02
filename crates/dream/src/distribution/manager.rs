@@ -156,6 +156,9 @@ impl DistributionManager {
         // Request global registry sync from the new node
         super::global::global_registry().request_sync(remote_node_atom);
 
+        // Request process groups sync from the new node
+        super::pg::pg().request_sync(remote_node_atom);
+
         tracing::info!(%addr, node = %remote_node_atom, "Connected to remote node");
         Ok(remote_node_atom)
     }
@@ -205,6 +208,9 @@ impl DistributionManager {
 
             // Notify monitors
             self.monitors.notify_node_down(node_atom, "disconnect requested".to_string());
+
+            // Clean up pg memberships from this node
+            super::pg::pg().remove_node_members(node_atom);
 
             tracing::info!(node = %node_atom, "Disconnected from node");
             Ok(())
@@ -347,6 +353,9 @@ async fn handle_incoming_connection(
     // Send our global registry to the new node
     super::global::global_registry().request_sync(remote_node_atom);
 
+    // Send our process groups to the new node
+    super::pg::pg().request_sync(remote_node_atom);
+
     tracing::info!(
         remote_name = %remote_name,
         "Accepted incoming connection"
@@ -383,6 +392,8 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Ato
                 node_atom,
                 "connection closed".to_string(),
             );
+            // Clean up pg memberships from this node
+            super::pg::pg().remove_node_members(node_atom);
         }
     }
 }
@@ -430,6 +441,8 @@ async fn message_receiver_loop(node_atom: Atom) {
                 node_atom,
                 "connection closed".to_string(),
             );
+            // Clean up pg memberships from this node
+            super::pg::pg().remove_node_members(node_atom);
         }
     }
 }
@@ -479,6 +492,12 @@ async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
             // Handle global registry message
             if let Ok(msg) = postcard::from_bytes::<super::global::GlobalRegistryMessage>(&payload) {
                 super::global::global_registry().handle_message(msg, from_node);
+            }
+        }
+        DistMessage::ProcessGroups { payload } => {
+            // Handle process groups message
+            if let Ok(msg) = postcard::from_bytes::<super::pg::PgMessage>(&payload) {
+                super::pg::pg().handle_message(msg, from_node);
             }
         }
         _ => {
