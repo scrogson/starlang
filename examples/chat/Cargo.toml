@@ -1,9 +1,10 @@
 [package]
 name = "starlang-chat"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Multi-user chat application example using Starlang"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+publish = false
 
 [[bin]]
 name = "chat-server"

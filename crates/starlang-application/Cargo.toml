@@ -1,9 +1,14 @@
 [package]
 name = "starlang-application"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Application lifecycle management for Starlang"
-license = "MIT OR Apache-2.0"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
 
 [dependencies]
 starlang-core = { version = "0.1.0", path = "../starlang-core" }
