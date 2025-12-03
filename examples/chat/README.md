@@ -1,13 +1,18 @@
 # Starlang Chat Server
 
-A multi-user chat application demonstrating Starlang's capabilities:
+A fully distributed multi-user chat application demonstrating Starlang's capabilities:
 
 - **Processes** for user sessions (one per TCP connection)
 - **GenServers** for rooms and the room registry
-- **Message passing** between processes
-- **Concurrent connection handling**
+- **DynamicSupervisor** for managing room processes
+- **Distribution** - connect multiple chat servers together
+- **Global Registry** - rooms are registered globally across all nodes
+- **pg (Process Groups)** - distributed process groups for room membership
+- **Cross-node messaging** - users on different nodes can chat in the same room
 
 ## Architecture
+
+### Single Node
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -28,6 +33,13 @@ A multi-user chat application demonstrating Starlang's capabilities:
 ┌─────────────────────────────────────────────────────────────┐
 │                   Registry GenServer                        │
 │              (manages room creation/lookup)                 │
+│           Uses Global Registry for cross-node access        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  DynamicSupervisor                          │
+│              (supervises room GenServers)                   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -40,9 +52,45 @@ A multi-user chat application demonstrating Starlang's capabilities:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Distributed Cluster
+
+```
+┌─────────────────────────────────┐     ┌─────────────────────────────────┐
+│           Node 1                │     │           Node 2                │
+│         (node1@localhost)       │     │         (node2@localhost)       │
+│                                 │     │                                 │
+│  ┌─────────────────────────┐   │     │   ┌─────────────────────────┐  │
+│  │    TCP :9999            │   │     │   │    TCP :9998            │  │
+│  │  (client connections)   │   │     │   │  (client connections)   │  │
+│  └─────────────────────────┘   │     │   └─────────────────────────┘  │
+│             │                   │     │             │                  │
+│  ┌──────────┴──────────┐       │     │       ┌─────┴──────────┐       │
+│  │ alice   │   bob     │       │     │       │ charlie        │       │
+│  │ Session │   Session │       │     │       │ Session        │       │
+│  └─────────┴───────────┘       │     │       └────────────────┘       │
+│             │                   │     │             │                  │
+│  ┌──────────┴──────────┐       │     │       ┌─────┴──────────┐       │
+│  │   Registry          │◄──────┼─────┼──────►│   Registry     │       │
+│  │ (Global Registry)   │       │     │       │ (Global Reg.)  │       │
+│  └─────────────────────┘       │     │       └────────────────┘       │
+│             │                   │     │             │                  │
+│  ┌──────────┴──────────┐       │     │             │                  │
+│  │   #general Room     │◄──────┼─────┼─────────────┘                  │
+│  │   (pg group)        │       │     │   (charlie joins #general      │
+│  └─────────────────────┘       │     │    via global registry)        │
+│                                 │     │                                 │
+│    Distribution Port :9000     │◄───►│    Distribution Port :9001     │
+│         (QUIC)                 │     │         (QUIC)                 │
+└─────────────────────────────────┘     └─────────────────────────────────┘
+                    │                               │
+                    └───────────────────────────────┘
+                           QUIC Distribution
+                        (encrypted, multiplexed)
+```
+
 ## Running
 
-### Start the server
+### Single Node
 
 ```bash
 cargo run --bin chat-server
@@ -50,31 +98,86 @@ cargo run --bin chat-server
 
 The server listens on `127.0.0.1:9999` by default.
 
-### Connect with the client
+### Distributed Cluster
+
+Start the first node:
+
+```bash
+cargo run --bin chat-server -- --name node1 --port 9999 --dist-port 9000
+```
+
+Start a second node and connect to the first:
+
+```bash
+cargo run --bin chat-server -- --name node2 --port 9998 --dist-port 9001 --connect 127.0.0.1:9000
+```
+
+Now clients connecting to either node can chat with each other!
+
+### Connect with the TUI Client
 
 ```bash
 cargo run --bin chat-client
+# Or connect to the second node:
+cargo run --bin chat-client -- --port 9998
 ```
 
-Or connect with netcat (note: uses binary protocol, so netcat won't work well):
-
-```bash
-nc localhost 9999
-```
+The client provides a full terminal UI with:
+- Room list sidebar
+- Message history with timestamps
+- User list for the current room
+- Input area with command history
+- Configurable themes via `~/.config/starlang-chat/config.toml`
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/nick <name>` | Set your nickname |
-| `/join <room>` | Join a room (creates it if it doesn't exist) |
-| `/leave <room>` | Leave a room |
-| `/msg <room> <text>` | Send a message to a room |
-| `/rooms` | List all rooms |
-| `/users <room>` | List users in a room |
-| `/quit` | Disconnect |
+| Command | Short | Description |
+|---------|-------|-------------|
+| `/nick <name>` | `/n` | Set your nickname |
+| `/join <room>` | `/j` | Join a room (creates it if it doesn't exist) |
+| `/leave` | `/l` | Leave current room |
+| `/rooms` | `/r` | List all rooms (across all nodes) |
+| `/users` | `/u` | List users in current room |
+| `/quit` | `/q` | Disconnect |
+| `/help` | `/h` | Show help |
 
-Short forms: `/n`, `/j`, `/l`, `/m`, `/r`, `/u`, `/q`
+Just type a message (without `/`) to send it to the current room.
+
+## Distribution Features
+
+### Global Registry
+
+Rooms are registered in the global registry, making them accessible from any node:
+
+```rust
+// Register a room globally
+starlang::dist::global::register("room:general", room_pid);
+
+// Look up a room from any node
+if let Some(pid) = starlang::dist::global::whereis("room:general") {
+    // Can send messages to the room, even if it's on another node
+}
+```
+
+### Process Groups (pg)
+
+Room membership uses distributed process groups:
+
+```rust
+// Join a room's process group
+starlang::dist::pg::join("room:general:members", session_pid);
+
+// Get all members across all nodes
+let members = starlang::dist::pg::get_members("room:general:members");
+```
+
+### Cross-Node Messaging
+
+When a user sends a message:
+1. The message goes to the room GenServer (may be on another node)
+2. The room looks up all members via pg (distributed)
+3. Each member's session receives the message
+4. Sessions send the message to their TCP clients
 
 ## Protocol
 
@@ -122,32 +225,50 @@ enum ServerEvent {
 }
 ```
 
-## Example Session
+## Example: Cross-Node Chat Session
 
+Terminal 1 - Start node1:
+```bash
+$ cargo run --bin chat-server -- --name node1 --port 9999 --dist-port 9000
+INFO Starting Starlang Chat Server name=node1 port=9999 dist_port=9000
+INFO Distribution started node=node1@localhost addr=0.0.0.0:9000
 ```
-$ cargo run --bin chat-client
-Connecting to 127.0.0.1:9999...
-Connected! Type /help for commands.
 
-Welcome to Starlang Chat! Use /nick <name> to set your nickname.
+Terminal 2 - Start node2 and connect to node1:
+```bash
+$ cargo run --bin chat-server -- --name node2 --port 9998 --dist-port 9001 --connect 127.0.0.1:9000
+INFO Starting Starlang Chat Server name=node2 port=9999 dist_port=9001
+INFO Distribution started node=node2@localhost addr=0.0.0.0:9001
+INFO Connected to peer node peer=127.0.0.1:9000 node_id=node1@localhost
+```
 
+Terminal 3 - Alice connects to node1:
+```bash
+$ cargo run --bin chat-client -- --port 9999
 > /nick alice
-[Nickname set to 'alice']
 > /join general
-[Joined #general]
-> /msg general Hello everyone!
-[#general] <alice> Hello everyone!
-> /users general
-[Users in #general:]
-  alice
-> /quit
-[Goodbye!]
+> hello from node1!
 ```
+
+Terminal 4 - Bob connects to node2:
+```bash
+$ cargo run --bin chat-client -- --port 9998
+> /nick bob
+> /join general      # Joins the same room, created on node1
+[#general] <alice> hello from node1!
+> hello from node2!
+```
+
+Alice sees Bob's message, even though they're connected to different servers!
 
 ## Starlang Concepts Demonstrated
 
 1. **Processes**: Each client connection spawns a session process
 2. **GenServer**: Rooms and registry are GenServers with call/cast semantics
-3. **Message Passing**: Sessions communicate with rooms via messages
-4. **Concurrent Handling**: Multiple clients handled simultaneously
-5. **Process Isolation**: Each session is isolated; one crash doesn't affect others
+3. **DynamicSupervisor**: Room processes are dynamically supervised
+4. **Message Passing**: Sessions communicate with rooms via messages
+5. **Concurrent Handling**: Multiple clients handled simultaneously
+6. **Process Isolation**: Each session is isolated; one crash doesn't affect others
+7. **Distribution**: Multiple nodes form a cluster with QUIC transport
+8. **Global Registry**: Named processes accessible from any node
+9. **Process Groups (pg)**: Distributed group membership for pub/sub patterns
