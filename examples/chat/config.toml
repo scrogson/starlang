@@ -1,0 +1,43 @@
+# DREAM Chat Client Configuration
+# Copy this file to ~/.config/dream-chat/config.toml to customize
+
+[theme]
+# Colors can be specified as:
+# - Named colors: "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+#                 "gray", "dark_gray", "light_red", "light_green", "light_yellow",
+#                 "light_blue", "light_magenta", "light_cyan"
+# - RGB hex: "#ff5500" or "ff5500"
+# - RGB values: { r = 255, g = 85, b = 0 }
+
+# Panel borders when focused
+border_focused = "yellow"
+# Panel borders when not focused
+border_unfocused = "dark_gray"
+
+# Panel title when focused
+title_focused = "yellow"
+# Panel title when not focused
+title_unfocused = "white"
+
+# Selection highlight (background color for selected items)
+highlight_bg = "white"
+# Selection highlight foreground
+highlight_fg = "black"
+
+# User colors
+user_online = "green"
+user_self = "green"
+
+# Room colors
+room_active = "green"
+room_unread = "yellow"
+room_normal = "white"
+
+# Chat message colors
+message_nick = "cyan"
+message_system = "dark_gray"
+message_text = "white"
+
+# Status bar
+status_connected = "cyan"
+status_disconnected = "red"

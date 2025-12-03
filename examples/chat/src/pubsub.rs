@@ -52,6 +52,8 @@ fn local_registry() -> &'static Arc<Registry<String, ()>> {
 /// cross-node pub/sub capabilities.
 pub struct PubSub;
 
+/// Allow dead code for API completeness - these functions may be used by consumers.
+#[allow(dead_code)]
 impl PubSub {
     /// Subscribe the current process to a topic.
     pub fn subscribe(topic: &str) {

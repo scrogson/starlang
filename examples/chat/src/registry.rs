@@ -53,6 +53,7 @@ impl Registry {
     }
 
     /// Get a room by name.
+    #[allow(dead_code)]
     pub async fn get_room(name: &str) -> Option<Pid> {
         match Self::call(RegistryCall::GetRoom(name.to_string())).await? {
             RegistryReply::Room(pid) => pid,
@@ -61,6 +62,7 @@ impl Registry {
     }
 
     /// Get or create a room by name.
+    #[allow(dead_code)]
     pub async fn get_or_create_room(name: &str) -> Option<Pid> {
         match Self::call(RegistryCall::GetOrCreateRoom(name.to_string())).await? {
             RegistryReply::Room(pid) => pid,

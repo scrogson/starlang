@@ -304,10 +304,16 @@ async fn handle_incoming_connection(
     // Get the manager
     let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
 
-    // Check if already connected
-    if manager.nodes.contains_key(&remote_node_atom) {
-        connection.close("duplicate connection");
-        return Err(DistError::AlreadyConnected(remote_node_atom));
+    // If already connected, close the old connection and replace it
+    // This handles reconnection after network issues
+    if let Some((_, old_node)) = manager.nodes.remove(&remote_node_atom) {
+        tracing::info!(node = %remote_node_atom, "Replacing existing connection");
+        old_node.connection.close("replaced by new connection");
+        if let Some(addr) = old_node.info.addr {
+            manager.addr_to_node.remove(&addr);
+        }
+        // Clean up pg memberships from this node (they'll be re-synced)
+        super::pg::pg().remove_node_members(remote_node_atom);
     }
 
     // Send Welcome with just our node name

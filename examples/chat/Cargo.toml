@@ -28,3 +28,12 @@ postcard = { version = "1", features = ["alloc"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
+
+# TUI dependencies for chat-client
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio-stream = "0.1"
+futures = "0.3"
+unicode-width = "0.2"
+toml = "0.8"
+dirs = "5"

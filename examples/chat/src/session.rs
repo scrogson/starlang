@@ -60,11 +60,26 @@ impl Session {
                 }
             }
 
-            // Read more data from socket or receive channel messages
+            // First, drain any pending process messages (non-blocking)
+            while let Some(data) = dream::try_recv() {
+                self.handle_channel_message(&data).await;
+            }
+
+            // Now wait for either TCP data or process messages
             let stream = self.stream.clone();
             let mut guard = stream.lock().await;
 
             tokio::select! {
+                biased; // Prefer process messages over TCP
+
+                // Check for messages from channels (broadcasts, pushes)
+                msg = dream::recv_timeout(Duration::from_millis(100)) => {
+                    drop(guard); // Release lock before processing
+                    if let Ok(Some(data)) = msg {
+                        self.handle_channel_message(&data).await;
+                    }
+                }
+
                 result = guard.read(&mut buf) => {
                     match result {
                         Ok(0) => {
@@ -81,13 +96,6 @@ impl Session {
                             self.cleanup().await;
                             return;
                         }
-                    }
-                }
-                // Check for messages from channels (broadcasts, pushes)
-                msg = dream::recv_timeout(Duration::from_millis(10)) => {
-                    drop(guard); // Release lock before processing
-                    if let Ok(Some(data)) = msg {
-                        self.handle_channel_message(&data).await;
                     }
                 }
             }
@@ -107,26 +115,61 @@ impl Session {
                     // Decode the room event
                     if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
                         let room_name = topic.strip_prefix("room:").unwrap_or(&topic);
-                        let server_event = match room_event {
-                            RoomOutEvent::UserJoined { nick } => ServerEvent::UserJoined {
-                                room: room_name.to_string(),
-                                nick,
-                            },
-                            RoomOutEvent::UserLeft { nick } => ServerEvent::UserLeft {
-                                room: room_name.to_string(),
-                                nick,
-                            },
-                            RoomOutEvent::Message { from, text } => ServerEvent::Message {
-                                room: room_name.to_string(),
-                                from,
-                                text,
-                            },
-                            RoomOutEvent::PresenceState { users } => ServerEvent::UserList {
-                                room: room_name.to_string(),
-                                users,
-                            },
-                        };
-                        self.send_event(server_event).await;
+                        match room_event {
+                            RoomOutEvent::UserJoined { nick } => {
+                                self.send_event(ServerEvent::UserJoined {
+                                    room: room_name.to_string(),
+                                    nick,
+                                })
+                                .await;
+                            }
+                            RoomOutEvent::UserLeft { nick } => {
+                                self.send_event(ServerEvent::UserLeft {
+                                    room: room_name.to_string(),
+                                    nick,
+                                })
+                                .await;
+                            }
+                            RoomOutEvent::Message { from, text } => {
+                                self.send_event(ServerEvent::Message {
+                                    room: room_name.to_string(),
+                                    from,
+                                    text,
+                                })
+                                .await;
+                            }
+                            RoomOutEvent::PresenceState { users } => {
+                                self.send_event(ServerEvent::UserList {
+                                    room: room_name.to_string(),
+                                    users,
+                                })
+                                .await;
+                            }
+                            RoomOutEvent::PresenceSyncRequest { from_pid } => {
+                                // Someone new joined and wants to know who's here
+                                // Respond with our nick
+                                tracing::debug!(
+                                    from_pid = %from_pid,
+                                    my_nick = ?self.nick,
+                                    "Received presence sync request, will respond"
+                                );
+                                self.respond_to_presence_sync(&topic, &from_pid).await;
+                            }
+                            RoomOutEvent::PresenceSyncResponse { nick } => {
+                                // An existing member announced themselves
+                                // Send this as a UserJoined so client adds them to list
+                                tracing::debug!(
+                                    room = %room_name,
+                                    nick = %nick,
+                                    "Received presence sync response, sending UserJoined to client"
+                                );
+                                self.send_event(ServerEvent::UserJoined {
+                                    room: room_name.to_string(),
+                                    nick,
+                                })
+                                .await;
+                            }
+                        }
                     } else {
                         tracing::warn!(event = %event, "Failed to decode room event");
                     }
@@ -163,6 +206,7 @@ impl Session {
 
             ClientCommand::ListRooms => {
                 let rooms = Registry::list_rooms().await;
+                tracing::debug!(room_count = rooms.len(), "Sending room list to client");
                 self.send_event(ServerEvent::RoomList { rooms }).await;
             }
 
@@ -248,7 +292,11 @@ impl Session {
             ChannelReply::JoinOk { .. } => {
                 // Broadcast that we joined to other members
                 self.broadcast_join(&topic, &nick).await;
-                self.send_event(ServerEvent::Joined { room: room_name }).await;
+                self.send_event(ServerEvent::Joined { room: room_name.clone() }).await;
+
+                // Request current user list from all members via presence sync
+                // This gathers nicks from all nodes
+                self.request_presence_sync(&topic, &room_name).await;
             }
             ChannelReply::JoinError { reason, .. } => {
                 self.send_event(ServerEvent::JoinError {
@@ -301,6 +349,81 @@ impl Session {
                 let members = dream::dist::pg::get_members(&group);
                 for pid in members {
                     let _ = dream::send_raw(pid, bytes.clone());
+                }
+            }
+        }
+    }
+
+    /// Request presence sync from all members in the room.
+    /// This tells existing members to announce themselves to the new joiner.
+    async fn request_presence_sync(&mut self, topic: &str, room_name: &str) {
+        // Small delay to allow pg membership to sync across nodes
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let my_pid = dream::current_pid();
+        let event = RoomOutEvent::PresenceSyncRequest {
+            from_pid: format!("{:?}", my_pid),
+        };
+        if let Ok(payload) = postcard::to_allocvec(&event) {
+            let msg = ChannelReply::Push {
+                topic: topic.to_string(),
+                event: "presence_sync_request".to_string(),
+                payload,
+            };
+            if let Ok(bytes) = postcard::to_allocvec(&msg) {
+                let group = format!("channel:{}", topic);
+                let members = dream::dist::pg::get_members(&group);
+                tracing::debug!(
+                    group = %group,
+                    member_count = members.len(),
+                    members = ?members,
+                    "Requesting presence sync from pg members"
+                );
+                for pid in members {
+                    if pid != my_pid {
+                        tracing::debug!(target_pid = ?pid, "Sending presence sync request");
+                        let _ = dream::send_raw(pid, bytes.clone());
+                    }
+                }
+            }
+        }
+
+        // Also add ourselves to the user list we'll send to client
+        if let Some(nick) = &self.nick {
+            self.send_event(ServerEvent::UserList {
+                room: room_name.to_string(),
+                users: vec![nick.clone()],
+            })
+            .await;
+        }
+    }
+
+    /// Respond to a presence sync request by announcing our nick.
+    async fn respond_to_presence_sync(&self, topic: &str, _requester_pid: &str) {
+        if let Some(nick) = &self.nick {
+            let my_pid = dream::current_pid();
+            let event = RoomOutEvent::PresenceSyncResponse { nick: nick.clone() };
+            if let Ok(payload) = postcard::to_allocvec(&event) {
+                let msg = ChannelReply::Push {
+                    topic: topic.to_string(),
+                    event: "presence_sync_response".to_string(),
+                    payload,
+                };
+                if let Ok(bytes) = postcard::to_allocvec(&msg) {
+                    // Send to all members except ourselves
+                    let group = format!("channel:{}", topic);
+                    let members = dream::dist::pg::get_members(&group);
+                    tracing::debug!(
+                        topic = %topic,
+                        nick = %nick,
+                        member_count = members.len(),
+                        "Responding to presence sync"
+                    );
+                    for pid in members {
+                        if pid != my_pid {
+                            let _ = dream::send_raw(pid, bytes.clone());
+                        }
+                    }
                 }
             }
         }

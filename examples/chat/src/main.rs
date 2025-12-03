@@ -28,6 +28,9 @@
 //!
 //! The protocol uses length-prefixed binary messages (postcard serialization).
 
+#![deny(warnings)]
+#![deny(missing_docs)]
+
 mod channel;
 mod protocol;
 mod pubsub;
@@ -36,7 +39,7 @@ mod room;
 mod server;
 mod session;
 
-// PubSub is now stateless (uses pg under the hood), so we don't need to export it
+// PubSub module is available for use but not currently used in main
 #[allow(unused_imports)]
 use pubsub::PubSub;
 

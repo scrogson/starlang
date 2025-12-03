@@ -63,25 +63,28 @@ node name client_port dist_port connect="":
 # Chat Client Commands
 # ─────────────────────────────────────────────────────────────
 
+# Path to the chat client config file
+chat_config := "examples/chat/config.toml"
+
 # Connect client to node1 (port 9999)
 client:
-    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9999
+    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9999 --config {{chat_config}}
 
 # Connect client to node1 (alias)
 client1:
-    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9999
+    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9999 --config {{chat_config}}
 
 # Connect client to node2 (port 9998)
 client2:
-    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9998
+    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9998 --config {{chat_config}}
 
 # Connect client to node3 (port 9997)
 client3:
-    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9997
+    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port 9997 --config {{chat_config}}
 
 # Connect client to a specific port: just connect <port>
 connect port:
-    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port {{port}}
+    cargo run --manifest-path examples/chat/Cargo.toml --bin chat-client -- --port {{port}} --config {{chat_config}}
 
 # ─────────────────────────────────────────────────────────────
 # Development Helpers

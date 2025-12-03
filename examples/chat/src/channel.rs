@@ -44,6 +44,10 @@ pub enum RoomOutEvent {
     Message { from: String, text: String },
     /// Presence update (who's in the room).
     PresenceState { users: Vec<String> },
+    /// Request for presence sync (new joiner wants to know who's here).
+    PresenceSyncRequest { from_pid: String },
+    /// Response to presence sync (existing member announces themselves).
+    PresenceSyncResponse { nick: String },
 }
 
 /// Metadata tracked in Presence for each user.
@@ -88,6 +92,15 @@ impl Channel for RoomChannel {
         }
 
         tracing::info!(room = %room_name, nick = %payload.nick, "User joining room");
+
+        // Register the room globally if not already registered
+        // This makes the room visible in the room list across all nodes
+        let global_name = format!("room:{}", room_name);
+        if dream::dist::global::whereis(&global_name).is_none() {
+            // Use the socket PID as a placeholder - the room is just a topic, not a process
+            dream::dist::global::register(&global_name, socket.pid);
+            tracing::info!(room = %room_name, "Room registered globally");
+        }
 
         // Track presence for this user in the room
         let presence_key = format!("user:{}", socket.pid);
