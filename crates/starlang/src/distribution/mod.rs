@@ -44,8 +44,8 @@ pub(crate) mod protocol;
 mod transport;
 
 pub use discovery::NodeDiscovery;
-pub use manager::{connect, disconnect, nodes, node_info};
-pub use monitor::{monitor_node, demonitor_node, NodeDown, NodeDownReason, NodeMonitorRef};
+pub use manager::{connect, disconnect, node_info, nodes};
+pub use monitor::{demonitor_node, monitor_node, NodeDown, NodeDownReason, NodeMonitorRef};
 pub use node::{init_distribution, Config};
 pub use protocol::DistError;
 

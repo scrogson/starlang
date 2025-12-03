@@ -98,16 +98,10 @@ pub trait GenServer: Sized + Send + Sync + 'static {
     ) -> CallResult<Self::State, Self::Reply>;
 
     /// Handles an asynchronous cast.
-    async fn handle_cast(
-        msg: Self::Cast,
-        state: &mut Self::State,
-    ) -> CastResult<Self::State>;
+    async fn handle_cast(msg: Self::Cast, state: &mut Self::State) -> CastResult<Self::State>;
 
     /// Handles other messages (system messages, raw messages, etc.).
-    async fn handle_info(
-        msg: Vec<u8>,
-        state: &mut Self::State,
-    ) -> InfoResult<Self::State>;
+    async fn handle_info(msg: Vec<u8>, state: &mut Self::State) -> InfoResult<Self::State>;
 
     /// Handles continue instructions from init/call/cast results.
     async fn handle_continue(
@@ -167,7 +161,6 @@ async fn gen_server_loop<G: GenServer>(
     arg: G::InitArg,
     init_tx: Option<oneshot::Sender<Result<(), StartError>>>,
 ) {
-
     // Run init
     let mut state = match G::init(arg).await {
         InitResult::Ok(s) => {
@@ -511,7 +504,8 @@ pub async fn call<G: GenServer>(
 
     // Send the call using task-local send
     let call_data = protocol::encode_call(from, &request);
-    starlang_runtime::send_raw(server_pid, call_data).map_err(|_| CallError::NotAlive(server_pid))?;
+    starlang_runtime::send_raw(server_pid, call_data)
+        .map_err(|_| CallError::NotAlive(server_pid))?;
 
     // Selective receive: loop until we get the matching reply or timeout
     let start = std::time::Instant::now();
@@ -610,7 +604,8 @@ pub async fn stop(
 
     // Send stop message using task-local send
     let stop_data = protocol::encode_stop(reason, Some(from));
-    starlang_runtime::send_raw(server_pid, stop_data).map_err(|_| StopError::NotAlive(server_pid))?;
+    starlang_runtime::send_raw(server_pid, stop_data)
+        .map_err(|_| StopError::NotAlive(server_pid))?;
 
     // Wait for acknowledgment
     match starlang_runtime::recv_timeout(timeout).await {

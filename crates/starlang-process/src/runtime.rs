@@ -304,7 +304,11 @@ mod tests {
         let received_clone = received.clone();
 
         let pid = handle.spawn(move || async move {
-            if let Some(_msg) = starlang_runtime::recv_timeout(Duration::from_millis(100)).await.ok().flatten() {
+            if let Some(_msg) = starlang_runtime::recv_timeout(Duration::from_millis(100))
+                .await
+                .ok()
+                .flatten()
+            {
                 received_clone.store(true, Ordering::SeqCst);
             }
         });
@@ -407,7 +411,10 @@ mod tests {
 
         let pid = handle.spawn(|| async move {
             loop {
-                if starlang_runtime::recv_timeout(Duration::from_millis(500)).await.is_err() {
+                if starlang_runtime::recv_timeout(Duration::from_millis(500))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }

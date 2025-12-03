@@ -19,8 +19,8 @@
 use super::protocol::DistMessage;
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use starlang_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
+use starlang_core::{Atom, Pid};
 use std::sync::OnceLock;
 
 /// Global registry instance.

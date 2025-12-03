@@ -170,7 +170,7 @@ pub use starlang_supervisor as supervisor;
 pub use starlang_application as application;
 
 // Re-export macros
-pub use starlang_macros::{starlang_process, main, self_pid, GenServerImpl};
+pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 
 /// Prelude module for convenient imports.
 ///
@@ -201,7 +201,7 @@ pub mod prelude {
     pub use starlang_application::{AppConfig, AppController, AppSpec, Application, StartResult};
 
     // Macros
-    pub use starlang_macros::{starlang_process, main, self_pid, GenServerImpl};
+    pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 
     // Task-local functions for process operations without ctx
     pub use starlang_runtime::{
@@ -248,8 +248,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_gen_server_integration() {
-        use starlang_gen_server::async_trait;
         use serde::{Deserialize, Serialize};
+        use starlang_gen_server::async_trait;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use std::time::Duration;
@@ -323,7 +323,10 @@ mod tests {
         // Give the test time to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert!(test_passed.load(Ordering::SeqCst), "GenServer call should return 'pong'");
+        assert!(
+            test_passed.load(Ordering::SeqCst),
+            "GenServer call should return 'pong'"
+        );
     }
 
     #[tokio::test]

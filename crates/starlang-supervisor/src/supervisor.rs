@@ -96,9 +96,7 @@ impl SupervisorState {
             .ok_or_else(|| format!("child '{}' not found", id))?;
 
         // Call the start function
-        let pid = (child.spec.start)()
-            .await
-            .map_err(|e| format!("{}", e))?;
+        let pid = (child.spec.start)().await.map_err(|e| format!("{}", e))?;
 
         // Monitor the child using task-local context
         let monitor_ref =
@@ -434,10 +432,7 @@ pub async fn start<S: Supervisor>(
 ///
 /// Note: This is a simplified implementation. A full implementation would
 /// use a call/response protocol to query the supervisor.
-pub async fn which_children(
-    _handle: &RuntimeHandle,
-    _sup: Pid,
-) -> Result<Vec<ChildInfo>, String> {
+pub async fn which_children(_handle: &RuntimeHandle, _sup: Pid) -> Result<Vec<ChildInfo>, String> {
     // This would need a proper call mechanism
     // For now, return an error indicating this needs more work
     Err("which_children not yet implemented".to_string())
@@ -446,10 +441,7 @@ pub async fn which_children(
 /// Gets counts of supervisor children.
 ///
 /// Note: This is a simplified implementation.
-pub async fn count_children(
-    _handle: &RuntimeHandle,
-    _sup: Pid,
-) -> Result<ChildCounts, String> {
+pub async fn count_children(_handle: &RuntimeHandle, _sup: Pid) -> Result<ChildCounts, String> {
     // This would need a proper call mechanism
     Err("count_children not yet implemented".to_string())
 }

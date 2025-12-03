@@ -2,8 +2,8 @@
 //!
 //! Defines the message types sent between nodes.
 
-use starlang_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
+use starlang_core::{Atom, Pid};
 use std::fmt;
 
 /// Distribution protocol messages.
@@ -191,7 +191,10 @@ mod tests {
         let decoded = DistMessage::decode(&encoded).unwrap();
 
         match decoded {
-            DistMessage::Hello { node_name, creation } => {
+            DistMessage::Hello {
+                node_name,
+                creation,
+            } => {
                 assert_eq!(node_name, "test@localhost");
                 assert_eq!(creation, 42);
             }

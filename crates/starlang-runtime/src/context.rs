@@ -3,10 +3,10 @@
 //! The [`Context`] provides a process with access to runtime services
 //! like sending messages, creating links/monitors, and spawning new processes.
 
+use crate::SendError;
 use crate::mailbox::Mailbox;
 use crate::process_handle::{ProcessHandle, ProcessState};
 use crate::registry::ProcessRegistry;
-use crate::SendError;
 use starlang_core::{ExitReason, Pid, Ref, SystemMessage, Term};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;

@@ -3,8 +3,8 @@
 //! A [`ProcessHandle`] provides an interface for sending messages to a process,
 //! managing links and monitors, and querying process state.
 
-use crate::mailbox::{Envelope, MailboxSender};
 use crate::SendError;
+use crate::mailbox::{Envelope, MailboxSender};
 use starlang_core::{ExitReason, Pid, Ref, Term};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};

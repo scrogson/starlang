@@ -56,9 +56,9 @@
 
 use crate::dist::pg;
 use dashmap::DashMap;
-use starlang_core::{Atom, Pid};
 use parking_lot::RwLock;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use starlang_core::{Atom, Pid};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -219,13 +219,7 @@ impl PresenceTracker {
     }
 
     /// Track a presence.
-    pub fn track<M: Serialize>(
-        &self,
-        topic: &str,
-        key: &str,
-        pid: Pid,
-        meta: &M,
-    ) -> PresenceRef {
+    pub fn track<M: Serialize>(&self, topic: &str, key: &str, pid: Pid, meta: &M) -> PresenceRef {
         let presence_meta = PresenceMeta::new(pid, meta);
         let phx_ref = presence_meta.phx_ref.clone();
 
@@ -265,11 +259,7 @@ impl PresenceTracker {
         if let Some(mut topic_state) = self.state.get_mut(topic) {
             if let Some(key_state) = topic_state.get_mut(key) {
                 // Remove entries for this PID
-                removed_metas = key_state
-                    .metas
-                    .drain(..)
-                    .filter(|m| m.pid == pid)
-                    .collect();
+                removed_metas = key_state.metas.drain(..).filter(|m| m.pid == pid).collect();
                 key_state.metas.retain(|m| m.pid != pid);
 
                 // Clean up empty key
@@ -290,7 +280,9 @@ impl PresenceTracker {
                 joins: HashMap::new(),
                 leaves: [(
                     key.to_string(),
-                    PresenceState { metas: removed_metas },
+                    PresenceState {
+                        metas: removed_metas,
+                    },
                 )]
                 .into_iter()
                 .collect(),
@@ -394,17 +386,12 @@ impl PresenceTracker {
 
     /// List all presences for a topic.
     pub fn list(&self, topic: &str) -> HashMap<String, PresenceState> {
-        self.state
-            .get(topic)
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.state.get(topic).map(|s| s.clone()).unwrap_or_default()
     }
 
     /// Get presence for a specific key in a topic.
     pub fn get(&self, topic: &str, key: &str) -> Option<PresenceState> {
-        self.state
-            .get(topic)
-            .and_then(|s| s.get(key).cloned())
+        self.state.get(topic).and_then(|s| s.get(key).cloned())
     }
 
     /// Get all keys present in a topic.
@@ -507,7 +494,9 @@ impl PresenceTracker {
         for (key, leave_state) in diff.leaves {
             if let Some(local_state) = topic_state.get_mut(&key) {
                 for leave_meta in &leave_state.metas {
-                    local_state.metas.retain(|m| m.phx_ref != leave_meta.phx_ref);
+                    local_state
+                        .metas
+                        .retain(|m| m.phx_ref != leave_meta.phx_ref);
                 }
                 if local_state.metas.is_empty() {
                     topic_state.remove(&key);
@@ -756,9 +745,12 @@ mod tests {
             joins: [(
                 "user:remote".to_string(),
                 PresenceState {
-                    metas: vec![PresenceMeta::new(pid, &TestMeta {
-                        status: "online".to_string(),
-                    })],
+                    metas: vec![PresenceMeta::new(
+                        pid,
+                        &TestMeta {
+                            status: "online".to_string(),
+                        },
+                    )],
                 },
             )]
             .into_iter()

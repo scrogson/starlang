@@ -14,8 +14,8 @@
 //! after a node restart.
 
 use crate::node::node_name_atom;
-use starlang_atom::Atom;
 use serde::{Deserialize, Serialize};
+use starlang_atom::Atom;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -225,9 +225,16 @@ mod tests {
         let pid = Pid::new();
         // Local PIDs show as <0.id.creation>
         let display = format!("{}", pid);
-        assert!(display.starts_with("<0."), "expected local display format, got: {}", display);
+        assert!(
+            display.starts_with("<0."),
+            "expected local display format, got: {}",
+            display
+        );
         // Format is <0.id.creation> - verify structure
-        let parts: Vec<&str> = display.trim_matches(|c| c == '<' || c == '>').split('.').collect();
+        let parts: Vec<&str> = display
+            .trim_matches(|c| c == '<' || c == '>')
+            .split('.')
+            .collect();
         assert_eq!(parts.len(), 3, "expected 3 parts in PID display");
         assert_eq!(parts[0], "0", "expected node 0 for local PID");
     }

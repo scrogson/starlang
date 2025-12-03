@@ -5,8 +5,8 @@
 use super::protocol::{DistError, DistMessage};
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use starlang_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
+use starlang_core::{Atom, Pid};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 

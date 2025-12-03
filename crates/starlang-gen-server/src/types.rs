@@ -2,8 +2,8 @@
 //!
 //! These types mirror Elixir's GenServer return values.
 
-use starlang_core::{ExitReason, Pid, Ref};
 use serde::{Deserialize, Serialize};
+use starlang_core::{ExitReason, Pid, Ref};
 use std::sync::Arc;
 use std::time::Duration;
 

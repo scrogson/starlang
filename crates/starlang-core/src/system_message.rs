@@ -161,11 +161,7 @@ mod tests {
         let pid2 = Pid::new();
         let messages = vec![
             SystemMessage::exit(pid1, ExitReason::Normal),
-            SystemMessage::down(
-                Ref::from_raw(42),
-                pid2,
-                ExitReason::Error("test".into()),
-            ),
+            SystemMessage::down(Ref::from_raw(42), pid2, ExitReason::Error("test".into())),
             SystemMessage::Timeout,
         ];
 

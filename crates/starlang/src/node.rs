@@ -342,11 +342,7 @@ pub use crate::distribution::Config;
 /// ```
 pub async fn start(name: &str, port: u16) -> Result<(), DistError> {
     let addr = format!("0.0.0.0:{}", port);
-    Config::new()
-        .name(name)
-        .listen_addr(addr)
-        .start()
-        .await
+    Config::new().name(name).listen_addr(addr).start().await
 }
 
 // === Remote Spawning ===
@@ -370,13 +366,20 @@ pub async fn start(name: &str, port: u16) -> Result<(), DistError> {
 /// # Returns
 ///
 /// The PID of the spawned process.
-pub async fn spawn(_node: Atom, _module: &str, _function: &str, _args: Vec<u8>) -> Result<Pid, DistError> {
+pub async fn spawn(
+    _node: Atom,
+    _module: &str,
+    _function: &str,
+    _args: Vec<u8>,
+) -> Result<Pid, DistError> {
     // TODO: Implement remote spawning
     // This requires:
     // 1. A way to serialize function references
     // 2. Protocol message for spawn requests
     // 3. Remote process creation
-    Err(DistError::Connect("remote spawn not yet implemented".to_string()))
+    Err(DistError::Connect(
+        "remote spawn not yet implemented".to_string(),
+    ))
 }
 
 /// Spawns a linked process on a remote node.
@@ -384,8 +387,15 @@ pub async fn spawn(_node: Atom, _module: &str, _function: &str, _args: Vec<u8>) 
 /// This is equivalent to Elixir's `Node.spawn_link/2`.
 ///
 /// **Note**: This is not yet implemented.
-pub async fn spawn_link(_node: Atom, _module: &str, _function: &str, _args: Vec<u8>) -> Result<Pid, DistError> {
-    Err(DistError::Connect("remote spawn_link not yet implemented".to_string()))
+pub async fn spawn_link(
+    _node: Atom,
+    _module: &str,
+    _function: &str,
+    _args: Vec<u8>,
+) -> Result<Pid, DistError> {
+    Err(DistError::Connect(
+        "remote spawn_link not yet implemented".to_string(),
+    ))
 }
 
 /// Spawns a monitored process on a remote node.
@@ -393,8 +403,15 @@ pub async fn spawn_link(_node: Atom, _module: &str, _function: &str, _args: Vec<
 /// This is equivalent to Elixir's `Node.spawn_monitor/2`.
 ///
 /// **Note**: This is not yet implemented.
-pub async fn spawn_monitor(_node: Atom, _module: &str, _function: &str, _args: Vec<u8>) -> Result<(Pid, starlang_core::Ref), DistError> {
-    Err(DistError::Connect("remote spawn_monitor not yet implemented".to_string()))
+pub async fn spawn_monitor(
+    _node: Atom,
+    _module: &str,
+    _function: &str,
+    _args: Vec<u8>,
+) -> Result<(Pid, starlang_core::Ref), DistError> {
+    Err(DistError::Connect(
+        "remote spawn_monitor not yet implemented".to_string(),
+    ))
 }
 
 #[cfg(test)]

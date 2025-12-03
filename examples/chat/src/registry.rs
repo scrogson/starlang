@@ -9,9 +9,9 @@
 
 use crate::protocol::RoomInfo;
 use crate::room_supervisor;
+use serde::{Deserialize, Serialize};
 use starlang::dist::global;
 use starlang::gen_server::{self, prelude::*};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -244,7 +244,10 @@ impl GenServer for Registry {
         }
     }
 
-    async fn handle_cast(_msg: RegistryCast, state: &mut RegistryState) -> CastResult<RegistryState> {
+    async fn handle_cast(
+        _msg: RegistryCast,
+        state: &mut RegistryState,
+    ) -> CastResult<RegistryState> {
         CastResult::noreply(RegistryState {
             rooms: state.rooms.clone(),
         })

@@ -24,10 +24,10 @@ pub use context::Context;
 pub use error::{RuntimeError, SendError, SpawnError};
 pub use mailbox::{Mailbox, MailboxSender};
 pub use process_handle::{ProcessHandle, ProcessState};
-pub use registry::{set_remote_send_hook, ProcessRegistry, RemoteSendHook};
+pub use registry::{ProcessRegistry, RemoteSendHook, set_remote_send_hook};
 pub use task_local::{
-    current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
-    with_ctx_async, ProcessScope,
+    ProcessScope, current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv,
+    with_ctx, with_ctx_async,
 };
 
 // Re-export core types for convenience

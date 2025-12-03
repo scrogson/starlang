@@ -52,8 +52,8 @@
 //! This is handled by monitoring registered processes.
 
 use dashmap::DashMap;
-use starlang_core::Pid;
 use parking_lot::RwLock;
+use starlang_core::Pid;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -380,7 +380,9 @@ mod tests {
         let pid2 = Pid::new();
 
         // Both registrations succeed
-        assert!(registry.register("topic".to_string(), pid1, "alice").is_ok());
+        assert!(registry
+            .register("topic".to_string(), pid1, "alice")
+            .is_ok());
         assert!(registry.register("topic".to_string(), pid2, "bob").is_ok());
 
         // Lookup returns both

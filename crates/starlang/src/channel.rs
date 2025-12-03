@@ -60,8 +60,8 @@
 //! ```
 
 use async_trait::async_trait;
-use starlang_core::Pid;
 use serde::{de::DeserializeOwned, Serialize};
+use starlang_core::Pid;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -452,8 +452,8 @@ where
         payload: &[u8],
         socket: Socket<()>,
     ) -> Result<(Socket<Vec<u8>>, Option<Vec<u8>>), JoinError> {
-        let join_payload: C::JoinPayload =
-            postcard::from_bytes(payload).map_err(|e| JoinError::new(format!("invalid payload: {}", e)))?;
+        let join_payload: C::JoinPayload = postcard::from_bytes(payload)
+            .map_err(|e| JoinError::new(format!("invalid payload: {}", e)))?;
 
         match C::join(topic, join_payload, socket).await {
             JoinResult::Ok(typed_socket) => {
@@ -515,15 +515,13 @@ where
         match result {
             HandleResult::NoReply => HandleResult::NoReply,
             HandleResult::Reply { status, payload } => HandleResult::Reply { status, payload },
-            HandleResult::Broadcast { event, payload } => {
-                match postcard::to_allocvec(&payload) {
-                    Ok(bytes) => HandleResult::Broadcast {
-                        event,
-                        payload: bytes,
-                    },
-                    Err(_) => HandleResult::NoReply,
-                }
-            }
+            HandleResult::Broadcast { event, payload } => match postcard::to_allocvec(&payload) {
+                Ok(bytes) => HandleResult::Broadcast {
+                    event,
+                    payload: bytes,
+                },
+                Err(_) => HandleResult::NoReply,
+            },
             HandleResult::BroadcastFrom { event, payload } => {
                 match postcard::to_allocvec(&payload) {
                     Ok(bytes) => HandleResult::BroadcastFrom {
@@ -576,7 +574,7 @@ where
 // ============================================================================
 
 use crate::dist::pg;
-use serde::{Deserialize};
+use serde::Deserialize;
 
 /// Messages sent to a ChannelServer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -687,7 +685,8 @@ impl ChannelServer {
     where
         C::Assigns: Serialize + DeserializeOwned,
     {
-        self.handlers.push(Arc::new(TypedChannelHandler::<C>::new()));
+        self.handlers
+            .push(Arc::new(TypedChannelHandler::<C>::new()));
     }
 
     /// Find a handler for a topic.
@@ -901,7 +900,8 @@ impl ChannelServerBuilder {
     where
         C::Assigns: Serialize + DeserializeOwned,
     {
-        self.handlers.push(Arc::new(TypedChannelHandler::<C>::new()));
+        self.handlers
+            .push(Arc::new(TypedChannelHandler::<C>::new()));
         self
     }
 

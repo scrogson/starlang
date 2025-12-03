@@ -292,7 +292,10 @@ impl Session {
             ChannelReply::JoinOk { .. } => {
                 // Broadcast that we joined to other members
                 self.broadcast_join(&topic, &nick).await;
-                self.send_event(ServerEvent::Joined { room: room_name.clone() }).await;
+                self.send_event(ServerEvent::Joined {
+                    room: room_name.clone(),
+                })
+                .await;
 
                 // Request current user list from all members via presence sync
                 // This gathers nicks from all nodes
@@ -468,10 +471,7 @@ impl Session {
         };
 
         // Broadcast message to all room members
-        let event = RoomOutEvent::Message {
-            from: nick,
-            text,
-        };
+        let event = RoomOutEvent::Message { from: nick, text };
         if let Ok(payload) = postcard::to_allocvec(&event) {
             let msg = ChannelReply::Push {
                 topic: topic.to_string(),
@@ -526,7 +526,12 @@ impl Session {
     /// Cleanup when disconnecting.
     async fn cleanup(&mut self) {
         // Get joined topics before terminating
-        let topics: Vec<String> = self.channels.joined_topics().iter().map(|s| s.to_string()).collect();
+        let topics: Vec<String> = self
+            .channels
+            .joined_topics()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         // Broadcast leave for each room
         if let Some(nick) = &self.nick {

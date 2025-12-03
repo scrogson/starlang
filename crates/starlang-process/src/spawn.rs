@@ -67,8 +67,8 @@ where
 mod tests {
     use super::*;
     use crate::Runtime;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::time::sleep;
 

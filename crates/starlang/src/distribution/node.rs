@@ -140,7 +140,9 @@ pub async fn init_distribution(config: Config) -> Result<(), DistError> {
     // Start listening if an address was provided
     if let Some(addr) = listen_addr {
         let manager = DIST_MANAGER.get().unwrap();
-        manager.start_listener(addr, config.cert_path, config.key_path).await?;
+        manager
+            .start_listener(addr, config.cert_path, config.key_path)
+            .await?;
     }
 
     tracing::info!(name = %node_name, "Distribution initialized");

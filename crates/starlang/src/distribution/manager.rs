@@ -8,8 +8,8 @@ use super::protocol::{DistError, DistMessage};
 use super::transport::{QuicConnection, QuicTransport};
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use starlang_core::{Atom, NodeInfo, NodeName, Pid};
 use parking_lot::RwLock;
+use starlang_core::{Atom, NodeInfo, NodeName, Pid};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -207,7 +207,8 @@ impl DistributionManager {
             }
 
             // Notify monitors
-            self.monitors.notify_node_down(node_atom, "disconnect requested".to_string());
+            self.monitors
+                .notify_node_down(node_atom, "disconnect requested".to_string());
 
             // Clean up pg memberships from this node
             super::pg::pg().remove_node_members(node_atom);
@@ -295,7 +296,10 @@ async fn handle_incoming_connection(
     let hello = QuicConnection::recv_message(&mut recv).await?;
 
     let (remote_name, remote_creation) = match hello {
-        DistMessage::Hello { node_name, creation } => (node_name, creation),
+        DistMessage::Hello {
+            node_name,
+            creation,
+        } => (node_name, creation),
         _ => return Err(DistError::Handshake("expected Hello message".to_string())),
     };
 
@@ -394,10 +398,9 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Ato
             if let Some(addr) = node.info.addr {
                 manager.addr_to_node.remove(&addr);
             }
-            manager.monitors.notify_node_down(
-                node_atom,
-                "connection closed".to_string(),
-            );
+            manager
+                .monitors
+                .notify_node_down(node_atom, "connection closed".to_string());
             // Clean up pg memberships from this node
             super::pg::pg().remove_node_members(node_atom);
         }
@@ -443,10 +446,9 @@ async fn message_receiver_loop(node_atom: Atom) {
             if let Some(addr) = node.info.addr {
                 manager.addr_to_node.remove(&addr);
             }
-            manager.monitors.notify_node_down(
-                node_atom,
-                "connection closed".to_string(),
-            );
+            manager
+                .monitors
+                .notify_node_down(node_atom, "connection closed".to_string());
             // Clean up pg memberships from this node
             super::pg::pg().remove_node_members(node_atom);
         }
@@ -456,7 +458,11 @@ async fn message_receiver_loop(node_atom: Atom) {
 /// Handle an incoming message from a remote node.
 async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
     match msg {
-        DistMessage::Send { to, from: _, payload } => {
+        DistMessage::Send {
+            to,
+            from: _,
+            payload,
+        } => {
             // The PID in `to` now contains an Atom for the node.
             // If it matches our node name, deliver locally.
             if to.is_local() {
@@ -482,12 +488,16 @@ async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
         }
         DistMessage::MonitorNode { requesting_pid } => {
             if let Some(manager) = DIST_MANAGER.get() {
-                manager.monitors.add_remote_monitor(from_node, requesting_pid);
+                manager
+                    .monitors
+                    .add_remote_monitor(from_node, requesting_pid);
             }
         }
         DistMessage::DemonitorNode { requesting_pid } => {
             if let Some(manager) = DIST_MANAGER.get() {
-                manager.monitors.remove_remote_monitor(from_node, requesting_pid);
+                manager
+                    .monitors
+                    .remove_remote_monitor(from_node, requesting_pid);
             }
         }
         DistMessage::NodeGoingDown { reason } => {
@@ -496,7 +506,8 @@ async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
         }
         DistMessage::GlobalRegistry { payload } => {
             // Handle global registry message
-            if let Ok(msg) = postcard::from_bytes::<super::global::GlobalRegistryMessage>(&payload) {
+            if let Ok(msg) = postcard::from_bytes::<super::global::GlobalRegistryMessage>(&payload)
+            {
                 super::global::global_registry().handle_message(msg, from_node);
             }
         }

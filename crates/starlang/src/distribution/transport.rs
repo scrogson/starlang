@@ -2,7 +2,7 @@
 //!
 //! Handles the low-level QUIC connections using the `quinn` crate.
 
-use super::protocol::{parse_frame, frame_message, DistError, DistMessage};
+use super::protocol::{frame_message, parse_frame, DistError, DistMessage};
 use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
 };
@@ -43,8 +43,8 @@ impl QuicTransport {
         // Create client config for outgoing connections
         let client_config = configure_client()?;
 
-        let mut endpoint = Endpoint::server(server_config, addr)
-            .map_err(|e| DistError::Io(e.to_string()))?;
+        let mut endpoint =
+            Endpoint::server(server_config, addr).map_err(|e| DistError::Io(e.to_string()))?;
 
         // Set client config so this endpoint can also make outgoing connections
         endpoint.set_default_client_config(client_config);
@@ -87,7 +87,11 @@ impl QuicTransport {
     }
 
     /// Connect to a remote node.
-    pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<QuicConnection, DistError> {
+    pub async fn connect(
+        &self,
+        addr: SocketAddr,
+        server_name: &str,
+    ) -> Result<QuicConnection, DistError> {
         let connection = self
             .endpoint
             .connect(addr, server_name)
@@ -213,18 +217,18 @@ impl QuicConnection {
 }
 
 /// Generate a self-signed certificate for development.
-fn generate_self_signed(name: &str) -> Result<(ServerConfig, Vec<CertificateDer<'static>>), DistError> {
+fn generate_self_signed(
+    name: &str,
+) -> Result<(ServerConfig, Vec<CertificateDer<'static>>), DistError> {
     let cert = rcgen::generate_simple_self_signed(vec![name.to_string()])
         .map_err(|e| DistError::Tls(e.to_string()))?;
 
     let cert_der = CertificateDer::from(cert.cert);
     let key_der = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
 
-    let mut server_config = ServerConfig::with_single_cert(
-        vec![cert_der.clone()],
-        PrivateKeyDer::Pkcs8(key_der),
-    )
-    .map_err(|e| DistError::Tls(e.to_string()))?;
+    let mut server_config =
+        ServerConfig::with_single_cert(vec![cert_der.clone()], PrivateKeyDer::Pkcs8(key_der))
+            .map_err(|e| DistError::Tls(e.to_string()))?;
 
     // Configure transport
     let mut transport = TransportConfig::default();
@@ -236,7 +240,10 @@ fn generate_self_signed(name: &str) -> Result<(ServerConfig, Vec<CertificateDer<
 }
 
 /// Load certificates from files.
-fn load_certs(cert_path: &Path, key_path: &Path) -> Result<(ServerConfig, Vec<CertificateDer<'static>>), DistError> {
+fn load_certs(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<(ServerConfig, Vec<CertificateDer<'static>>), DistError> {
     let cert_pem = std::fs::read(cert_path)
         .map_err(|e| DistError::Tls(format!("failed to read cert: {}", e)))?;
     let key_pem = std::fs::read(key_path)

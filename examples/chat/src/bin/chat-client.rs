@@ -724,8 +724,8 @@ async fn handle_input(
                     }
                     KeyCode::PageUp => {
                         if let Some(state) = app.current_room_state() {
-                            app.scroll_offset =
-                                (app.scroll_offset + 10).min(state.messages.len().saturating_sub(1));
+                            app.scroll_offset = (app.scroll_offset + 10)
+                                .min(state.messages.len().saturating_sub(1));
                         }
                     }
                     KeyCode::PageDown => {
@@ -990,7 +990,12 @@ fn render_rooms(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
-        .highlight_style(Style::default().bg(app.theme.highlight_bg).fg(app.theme.highlight_fg).bold())
+        .highlight_style(
+            Style::default()
+                .bg(app.theme.highlight_bg)
+                .fg(app.theme.highlight_fg)
+                .bold(),
+        )
         .highlight_symbol("> ");
 
     f.render_stateful_widget(list, area, &mut app.room_list_state.clone());
@@ -1039,12 +1044,18 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
                 if msg.is_system {
                     Line::from(vec![
                         Span::styled("*** ", Style::default().fg(app.theme.message_system)),
-                        Span::styled(&msg.text, Style::default().fg(app.theme.message_system).italic()),
+                        Span::styled(
+                            &msg.text,
+                            Style::default().fg(app.theme.message_system).italic(),
+                        ),
                     ])
                 } else {
                     Line::from(vec![
                         Span::styled("<", Style::default().fg(app.theme.border_unfocused)),
-                        Span::styled(&msg.from, Style::default().fg(app.theme.message_nick).bold()),
+                        Span::styled(
+                            &msg.from,
+                            Style::default().fg(app.theme.message_nick).bold(),
+                        ),
                         Span::styled("> ", Style::default().fg(app.theme.border_unfocused)),
                         Span::styled(&msg.text, Style::default().fg(app.theme.message_text)),
                     ])
@@ -1069,9 +1080,10 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
             f.render_widget(indicator_widget, indicator_area);
         }
     } else {
-        let help = Paragraph::new("Join a room to start chatting\n\n/join <room> or select from list")
-            .style(Style::default().fg(app.theme.message_system))
-            .wrap(Wrap { trim: false });
+        let help =
+            Paragraph::new("Join a room to start chatting\n\n/join <room> or select from list")
+                .style(Style::default().fg(app.theme.message_system))
+                .wrap(Wrap { trim: false });
         f.render_widget(help, inner);
     }
 }
@@ -1119,7 +1131,12 @@ fn render_users(f: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
-        .highlight_style(Style::default().bg(app.theme.highlight_bg).fg(app.theme.highlight_fg).bold())
+        .highlight_style(
+            Style::default()
+                .bg(app.theme.highlight_bg)
+                .fg(app.theme.highlight_fg)
+                .bold(),
+        )
         .highlight_symbol("> ");
 
     f.render_stateful_widget(list, area, &mut app.user_list_state.clone());

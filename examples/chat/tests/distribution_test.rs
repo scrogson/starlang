@@ -44,7 +44,10 @@ async fn connect_client(port: u16) -> TcpStream {
                 attempts += 1;
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            Err(e) => panic!("Failed to connect to server on port {} after 10s: {}", port, e),
+            Err(e) => panic!(
+                "Failed to connect to server on port {} after 10s: {}",
+                port, e
+            ),
         }
     }
 }
@@ -96,18 +99,48 @@ enum ClientCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum ServerEvent {
-    Welcome { message: String },
-    NickOk { nick: String },
-    NickError { reason: String },
-    Joined { room: String },
-    JoinError { room: String, reason: String },
-    Left { room: String },
-    Message { room: String, from: String, text: String },
-    UserJoined { room: String, nick: String },
-    UserLeft { room: String, nick: String },
-    RoomList { rooms: Vec<RoomInfo> },
-    UserList { room: String, users: Vec<String> },
-    Error { message: String },
+    Welcome {
+        message: String,
+    },
+    NickOk {
+        nick: String,
+    },
+    NickError {
+        reason: String,
+    },
+    Joined {
+        room: String,
+    },
+    JoinError {
+        room: String,
+        reason: String,
+    },
+    Left {
+        room: String,
+    },
+    Message {
+        room: String,
+        from: String,
+        text: String,
+    },
+    UserJoined {
+        room: String,
+        nick: String,
+    },
+    UserLeft {
+        room: String,
+        nick: String,
+    },
+    RoomList {
+        rooms: Vec<RoomInfo>,
+    },
+    UserList {
+        room: String,
+        users: Vec<String>,
+    },
+    Error {
+        message: String,
+    },
     Shutdown,
 }
 
@@ -134,28 +167,64 @@ async fn test_single_node_chat() {
     let _ = read_message(&mut bob).await;
 
     // Alice sets nick
-    send_message(&mut alice, &encode_command(&ClientCommand::Nick("alice".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Nick("alice".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut alice).await);
-    assert!(matches!(resp, ServerEvent::NickOk { ref nick } if nick == "alice"), "Expected NickOk, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::NickOk { ref nick } if nick == "alice"),
+        "Expected NickOk, got {:?}",
+        resp
+    );
 
     // Bob sets nick
-    send_message(&mut bob, &encode_command(&ClientCommand::Nick("bob".into()))).await;
+    send_message(
+        &mut bob,
+        &encode_command(&ClientCommand::Nick("bob".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut bob).await);
-    assert!(matches!(resp, ServerEvent::NickOk { ref nick } if nick == "bob"), "Expected NickOk, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::NickOk { ref nick } if nick == "bob"),
+        "Expected NickOk, got {:?}",
+        resp
+    );
 
     // Alice joins room
-    send_message(&mut alice, &encode_command(&ClientCommand::Join("testroom".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Join("testroom".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut alice).await);
-    assert!(matches!(resp, ServerEvent::Joined { ref room } if room == "testroom"), "Expected Joined, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::Joined { ref room } if room == "testroom"),
+        "Expected Joined, got {:?}",
+        resp
+    );
 
     // Bob joins same room
-    send_message(&mut bob, &encode_command(&ClientCommand::Join("testroom".into()))).await;
+    send_message(
+        &mut bob,
+        &encode_command(&ClientCommand::Join("testroom".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut bob).await);
-    assert!(matches!(resp, ServerEvent::Joined { ref room } if room == "testroom"), "Expected Joined, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::Joined { ref room } if room == "testroom"),
+        "Expected Joined, got {:?}",
+        resp
+    );
 
     // Alice should get notification that Bob joined
     let resp = decode_event(&read_message(&mut alice).await);
-    assert!(matches!(resp, ServerEvent::UserJoined { ref nick, .. } if nick == "bob"), "Expected UserJoined, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::UserJoined { ref nick, .. } if nick == "bob"),
+        "Expected UserJoined, got {:?}",
+        resp
+    );
 
     // Alice sends a message
     send_message(
@@ -173,7 +242,8 @@ async fn test_single_node_chat() {
     let resp = decode_event(&resp.unwrap());
     assert!(
         matches!(resp, ServerEvent::Message { ref from, ref text, .. } if from == "alice" && text == "hello from alice"),
-        "Expected Message, got {:?}", resp
+        "Expected Message, got {:?}",
+        resp
     );
 
     // Clean up
@@ -195,12 +265,24 @@ async fn test_cross_node_global_registry() {
     let _ = read_message(&mut alice).await; // welcome
 
     // Alice sets nick and joins room
-    send_message(&mut alice, &encode_command(&ClientCommand::Nick("alice".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Nick("alice".into())),
+    )
+    .await;
     let _ = read_message(&mut alice).await;
 
-    send_message(&mut alice, &encode_command(&ClientCommand::Join("crossroom".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Join("crossroom".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut alice).await);
-    assert!(matches!(resp, ServerEvent::Joined { ref room } if room == "crossroom"), "Expected Joined, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::Joined { ref room } if room == "crossroom"),
+        "Expected Joined, got {:?}",
+        resp
+    );
 
     // Give time for global registry to sync
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -210,17 +292,32 @@ async fn test_cross_node_global_registry() {
     let _ = read_message(&mut bob).await; // welcome
 
     // Bob sets nick
-    send_message(&mut bob, &encode_command(&ClientCommand::Nick("bob".into()))).await;
+    send_message(
+        &mut bob,
+        &encode_command(&ClientCommand::Nick("bob".into())),
+    )
+    .await;
     let _ = read_message(&mut bob).await;
 
     // Bob joins the same room (should find it via global registry)
-    send_message(&mut bob, &encode_command(&ClientCommand::Join("crossroom".into()))).await;
+    send_message(
+        &mut bob,
+        &encode_command(&ClientCommand::Join("crossroom".into())),
+    )
+    .await;
     let resp = decode_event(&read_message(&mut bob).await);
-    assert!(matches!(resp, ServerEvent::Joined { ref room } if room == "crossroom"), "Expected Joined, got {:?}", resp);
+    assert!(
+        matches!(resp, ServerEvent::Joined { ref room } if room == "crossroom"),
+        "Expected Joined, got {:?}",
+        resp
+    );
 
     // Alice should receive notification that Bob joined (via distribution)
     let resp = timeout(Duration::from_secs(3), read_message(&mut alice)).await;
-    assert!(resp.is_ok(), "Alice should receive notification that Bob joined");
+    assert!(
+        resp.is_ok(),
+        "Alice should receive notification that Bob joined"
+    );
     let resp = decode_event(&resp.unwrap());
     assert!(
         matches!(resp, ServerEvent::UserJoined { ref nick, .. } if nick == "bob"),
@@ -240,7 +337,10 @@ async fn test_cross_node_global_registry() {
 
     // Alice should receive the message (routed across nodes)
     let resp = timeout(Duration::from_secs(3), read_message(&mut alice)).await;
-    assert!(resp.is_ok(), "Alice should receive bob's message across nodes");
+    assert!(
+        resp.is_ok(),
+        "Alice should receive bob's message across nodes"
+    );
     let resp = decode_event(&resp.unwrap());
     assert!(
         matches!(resp, ServerEvent::Message { ref from, ref text, .. } if from == "bob" && text == "hello from bob on node2"),
@@ -266,9 +366,17 @@ async fn test_room_list_across_nodes() {
     // Connect alice to node1 and create a room
     let mut alice = connect_client(39999).await;
     let _ = read_message(&mut alice).await;
-    send_message(&mut alice, &encode_command(&ClientCommand::Nick("alice".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Nick("alice".into())),
+    )
+    .await;
     let _ = read_message(&mut alice).await;
-    send_message(&mut alice, &encode_command(&ClientCommand::Join("room_on_node1".into()))).await;
+    send_message(
+        &mut alice,
+        &encode_command(&ClientCommand::Join("room_on_node1".into())),
+    )
+    .await;
     let _ = read_message(&mut alice).await;
 
     // Give time for sync
@@ -277,7 +385,11 @@ async fn test_room_list_across_nodes() {
     // Connect bob to node2 and list rooms
     let mut bob = connect_client(39998).await;
     let _ = read_message(&mut bob).await;
-    send_message(&mut bob, &encode_command(&ClientCommand::Nick("bob".into()))).await;
+    send_message(
+        &mut bob,
+        &encode_command(&ClientCommand::Nick("bob".into())),
+    )
+    .await;
     let _ = read_message(&mut bob).await;
 
     // List rooms from node2 - should see room created on node1

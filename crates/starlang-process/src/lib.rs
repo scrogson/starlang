@@ -38,7 +38,7 @@ mod runtime;
 mod spawn;
 
 pub use runtime::{Runtime, RuntimeHandle};
-pub use spawn::{spawn, spawn_link, spawn_monitor, ProcessFn};
+pub use spawn::{ProcessFn, spawn, spawn_link, spawn_monitor};
 
 // Re-export core types
 pub use starlang_core::{ExitReason, Pid, Ref, SystemMessage, Term};

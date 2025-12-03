@@ -20,9 +20,7 @@ pub const NAME: &str = "room_supervisor";
 ///
 /// This should be called once during application startup.
 pub async fn start() -> Result<Pid, starlang_supervisor::StartError> {
-    let opts = DynamicSupervisorOpts::new()
-        .max_restarts(10)
-        .max_seconds(5);
+    let opts = DynamicSupervisorOpts::new().max_restarts(10).max_seconds(5);
 
     let pid = dynamic_supervisor::start(opts).await?;
 

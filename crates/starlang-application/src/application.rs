@@ -117,11 +117,7 @@ impl AppController {
     }
 
     /// Starts an application with configuration.
-    pub async fn start_with_config(
-        &self,
-        name: &str,
-        config: AppConfig,
-    ) -> Result<(), StartError> {
+    pub async fn start_with_config(&self, name: &str, config: AppConfig) -> Result<(), StartError> {
         // Check if already running
         {
             let running = self.running.read().unwrap();
@@ -163,7 +159,9 @@ impl AppController {
 
             // Safety: We're calling within the same function scope
             let result = unsafe {
-                let start_fn: &(dyn Fn(&RuntimeHandle, &AppConfig) -> Result<StartResult, String> + Send + Sync) = &*start_fn;
+                let start_fn: &(dyn Fn(&RuntimeHandle, &AppConfig) -> Result<StartResult, String>
+                      + Send
+                      + Sync) = &*start_fn;
                 start_fn(&self.handle, &app_config)
             };
 

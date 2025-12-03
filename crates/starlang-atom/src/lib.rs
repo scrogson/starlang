@@ -101,9 +101,7 @@ impl Atom {
     ///
     /// Panics if the atom is invalid (should never happen in normal use).
     pub fn as_str(&self) -> String {
-        table()
-            .get(*self)
-            .expect("invalid atom index")
+        table().get(*self).expect("invalid atom index")
     }
 
     /// Get the internal index of this atom.

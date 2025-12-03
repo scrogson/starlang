@@ -119,12 +119,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // No need to start a GenServer
 
     // Start the room supervisor (DynamicSupervisor for managing room processes)
-    let room_sup_pid = room_supervisor::start().await.expect("Failed to start room supervisor");
+    let room_sup_pid = room_supervisor::start()
+        .await
+        .expect("Failed to start room supervisor");
     starlang::register(room_supervisor::NAME, room_sup_pid);
     tracing::info!(pid = ?room_sup_pid, "Room supervisor started and registered");
 
     // Start the room registry and register it by name
-    let registry_pid = registry::Registry::start().await.expect("Failed to start registry");
+    let registry_pid = registry::Registry::start()
+        .await
+        .expect("Failed to start registry");
     starlang::register(registry::Registry::NAME, registry_pid);
     tracing::info!(pid = ?registry_pid, "Registry started and registered");
 

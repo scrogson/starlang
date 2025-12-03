@@ -9,8 +9,8 @@
 //! Node identity is stored as an [`Atom`] for efficient comparison and
 //! globally unambiguous PID addressing.
 
-use starlang_atom::Atom;
 use serde::{Deserialize, Serialize};
+use starlang_atom::Atom;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -187,7 +187,12 @@ pub struct NodeInfo {
 
 impl NodeInfo {
     /// Creates new node info.
-    pub fn new(name: impl Into<NodeName>, id: NodeId, addr: Option<SocketAddr>, creation: u32) -> Self {
+    pub fn new(
+        name: impl Into<NodeName>,
+        id: NodeId,
+        addr: Option<SocketAddr>,
+        creation: u32,
+    ) -> Self {
         Self {
             name: name.into(),
             id,
@@ -224,7 +229,11 @@ pub struct NodeIdentity {
 /// ```
 pub fn init_node(name: NodeName, creation: u32) -> Result<(), NodeIdentity> {
     let name_atom = Atom::from_str(name.as_str());
-    THIS_NODE.set(NodeIdentity { name, name_atom, creation })
+    THIS_NODE.set(NodeIdentity {
+        name,
+        name_atom,
+        creation,
+    })
 }
 
 /// Get this node's name.
@@ -239,7 +248,10 @@ pub fn node_name() -> Option<&'static NodeName> {
 /// Returns the empty atom if distribution hasn't been initialized.
 /// This is used for PID node field comparison.
 pub fn node_name_atom() -> Atom {
-    THIS_NODE.get().map(|n| n.name_atom).unwrap_or_else(local_node_atom)
+    THIS_NODE
+        .get()
+        .map(|n| n.name_atom)
+        .unwrap_or_else(local_node_atom)
 }
 
 /// Get this node's creation number.

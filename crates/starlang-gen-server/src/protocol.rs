@@ -3,8 +3,8 @@
 //! These messages are used internally for call/cast/reply coordination.
 
 use crate::types::From;
-use starlang_core::{DecodeError, ExitReason, Ref, Term};
 use serde::{Deserialize, Serialize};
+use starlang_core::{DecodeError, ExitReason, Ref, Term};
 
 /// Internal GenServer protocol messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,8 +5,8 @@
 
 use crate::protocol::{RoomInfo, ServerEvent};
 use crate::pubsub::PubSub;
-use starlang::gen_server::prelude::*;
 use serde::{Deserialize, Serialize};
+use starlang::gen_server::prelude::*;
 use std::collections::HashMap;
 
 /// Room GenServer implementation.
@@ -184,7 +184,10 @@ impl GenServer for Room {
         })
     }
 
-    async fn handle_continue(_arg: ContinueArg, state: &mut RoomState) -> ContinueResult<RoomState> {
+    async fn handle_continue(
+        _arg: ContinueArg,
+        state: &mut RoomState,
+    ) -> ContinueResult<RoomState> {
         ContinueResult::NoReply(RoomState {
             name: state.name.clone(),
             members: state.members.clone(),

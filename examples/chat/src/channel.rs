@@ -4,9 +4,9 @@
 //! including Phoenix-style Presence tracking for real-time user lists.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use starlang::channel::{Channel, HandleResult, JoinError, JoinResult, Socket};
 use starlang::presence;
-use serde::{Deserialize, Serialize};
 
 /// Custom state stored in each socket's assigns.
 #[derive(Debug, Clone, Serialize, Deserialize)]

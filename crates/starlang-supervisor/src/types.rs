@@ -2,8 +2,8 @@
 //!
 //! These types define how supervisors manage their children.
 
-use starlang_core::Pid;
 use serde::{Deserialize, Serialize};
+use starlang_core::Pid;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -102,9 +102,7 @@ impl std::error::Error for StartChildError {}
 
 /// A function that starts a child process.
 pub type StartFn = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<Pid, StartChildError>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<Pid, StartChildError>> + Send>> + Send + Sync,
 >;
 
 /// Specification for a child process.

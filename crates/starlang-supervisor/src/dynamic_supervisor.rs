@@ -34,8 +34,8 @@
 use crate::error::StartError;
 use crate::types::{ChildCounts, ChildInfo, ChildSpec, ChildType, RestartType, StartChildError};
 use dashmap::DashMap;
-use starlang_core::{ExitReason, Pid, Ref, SystemMessage, Term};
 use parking_lot::Mutex;
+use starlang_core::{ExitReason, Pid, Ref, SystemMessage, Term};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -129,13 +129,7 @@ impl SupervisorState {
             .map_err(|e| StartChildError::Failed(e.to_string()))?;
 
         // Store the child
-        self.children.insert(
-            pid,
-            ChildState {
-                spec,
-                monitor_ref,
-            },
-        );
+        self.children.insert(pid, ChildState { spec, monitor_ref });
         self.monitor_to_pid.insert(monitor_ref, pid);
 
         Ok(pid)
@@ -427,8 +421,7 @@ pub fn stop(supervisor: Pid, reason: ExitReason) -> Result<(), String> {
     }
 
     // Send exit to the supervisor process
-    starlang_runtime::with_ctx(|ctx| ctx.exit(supervisor, reason))
-        .map_err(|e| e.to_string())?;
+    starlang_runtime::with_ctx(|ctx| ctx.exit(supervisor, reason)).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -493,7 +486,10 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        assert!(test_passed.load(Ordering::SeqCst), "start_child test failed");
+        assert!(
+            test_passed.load(Ordering::SeqCst),
+            "start_child test failed"
+        );
     }
 
     #[tokio::test]

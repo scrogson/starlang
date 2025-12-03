@@ -12,7 +12,7 @@
 //!
 //! Uses `postcard` for compact binary serialization.
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 /// Error type for term decoding failures.

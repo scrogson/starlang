@@ -30,8 +30,8 @@
 use super::protocol::DistMessage;
 use super::DIST_MANAGER;
 use dashmap::DashMap;
-use starlang_core::{Atom, Pid};
 use serde::{Deserialize, Serialize};
+use starlang_core::{Atom, Pid};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -94,10 +94,7 @@ impl ProcessGroups {
         let group = group.into();
 
         // Add to group
-        self.groups
-            .entry(group.clone())
-            .or_default()
-            .insert(pid);
+        self.groups.entry(group.clone()).or_default().insert(pid);
 
         // Track reverse mapping
         self.pid_to_groups
@@ -203,14 +200,8 @@ impl ProcessGroups {
             PgMessage::Join { group, pid } => {
                 tracing::debug!(%group, ?pid, from_node = %from_node, "Received pg join");
                 // Don't broadcast - this is already a remote join
-                self.groups
-                    .entry(group.clone())
-                    .or_default()
-                    .insert(pid);
-                self.pid_to_groups
-                    .entry(pid)
-                    .or_default()
-                    .insert(group);
+                self.groups.entry(group.clone()).or_default().insert(pid);
+                self.pid_to_groups.entry(pid).or_default().insert(group);
             }
             PgMessage::Leave { group, pid } => {
                 tracing::debug!(%group, ?pid, from_node = %from_node, "Received pg leave");
@@ -250,11 +241,8 @@ impl ProcessGroups {
                     .groups
                     .iter()
                     .map(|r| {
-                        let local_members: Vec<Pid> = r.value()
-                            .iter()
-                            .filter(|p| p.is_local())
-                            .copied()
-                            .collect();
+                        let local_members: Vec<Pid> =
+                            r.value().iter().filter(|p| p.is_local()).copied().collect();
                         (r.key().clone(), local_members)
                     })
                     .filter(|(_, members)| !members.is_empty())
@@ -278,10 +266,7 @@ impl ProcessGroups {
                 // Merge remote group memberships
                 for (group, members) in groups {
                     for pid in members {
-                        self.groups
-                            .entry(group.clone())
-                            .or_default()
-                            .insert(pid);
+                        self.groups.entry(group.clone()).or_default().insert(pid);
                         self.pid_to_groups
                             .entry(pid)
                             .or_default()
@@ -338,11 +323,8 @@ impl ProcessGroups {
                     .groups
                     .iter()
                     .map(|r| {
-                        let local_members: Vec<Pid> = r.value()
-                            .iter()
-                            .filter(|p| p.is_local())
-                            .copied()
-                            .collect();
+                        let local_members: Vec<Pid> =
+                            r.value().iter().filter(|p| p.is_local()).copied().collect();
                         (r.key().clone(), local_members)
                     })
                     .filter(|(_, members)| !members.is_empty())

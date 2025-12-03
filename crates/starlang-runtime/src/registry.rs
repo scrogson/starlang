@@ -3,8 +3,8 @@
 //! The [`ProcessRegistry`] provides thread-safe access to all running processes,
 //! allowing message delivery, process lookup, and name registration.
 
-use crate::process_handle::ProcessHandle;
 use crate::SendError;
+use crate::process_handle::ProcessHandle;
 use dashmap::DashMap;
 use starlang_core::{Pid, Term};
 use std::sync::{Arc, OnceLock};
