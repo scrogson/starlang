@@ -117,6 +117,11 @@
 #[allow(dead_code)]
 pub mod distribution;
 
+/// Elixir-compatible Node API for distributed DREAM.
+///
+/// See [`node`] module for details.
+pub mod node;
+
 /// Local process registry with pub/sub support.
 ///
 /// See [`registry`] module for details.
@@ -203,6 +208,9 @@ pub mod prelude {
         current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
         with_ctx_async,
     };
+
+    // Node API essentials
+    pub use crate::node::{ListOption, PingResult};
 }
 
 #[cfg(test)]

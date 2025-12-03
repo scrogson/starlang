@@ -40,7 +40,7 @@ mod manager;
 mod monitor;
 mod node;
 pub mod pg;
-mod protocol;
+pub(crate) mod protocol;
 mod transport;
 
 pub use discovery::NodeDiscovery;
