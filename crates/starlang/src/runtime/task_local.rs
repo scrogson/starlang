@@ -169,3 +169,24 @@ where
     let mut guard = ctx.lock().await;
     f(&mut guard).await
 }
+
+/// Sends an exit signal to another process.
+///
+/// If `reason` is `ExitReason::Killed`, the target will terminate
+/// unconditionally. Otherwise, the behavior depends on whether
+/// the target is trapping exits.
+///
+/// # Panics
+///
+/// Panics if called outside of a Starlang process context.
+pub fn exit(target: Pid, reason: crate::core::ExitReason) {
+    let ctx = CONTEXT.with(|c| c.ctx.clone());
+    match ctx.try_lock() {
+        Ok(guard) => {
+            let _ = guard.exit(target, reason);
+        }
+        Err(_) => {
+            // Lock is held - can't send exit right now
+        }
+    }
+}

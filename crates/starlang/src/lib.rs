@@ -160,6 +160,9 @@ pub mod presence;
 /// Phoenix-style PubSub for distributed publish-subscribe messaging.
 pub mod pubsub;
 
+/// Timer module for scheduling delayed and repeated operations.
+pub mod timer;
+
 /// Peer node management for spawning and controlling linked nodes.
 ///
 /// This module is only available when the `peer` feature is enabled.
@@ -233,6 +236,9 @@ pub mod prelude {
 
     // Node API essentials
     pub use crate::node::{ListOption, PingResult};
+
+    // Timer essentials
+    pub use crate::timer::{TimerError, TimerRef, TimerResult};
 }
 
 #[cfg(test)]
