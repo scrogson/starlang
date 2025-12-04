@@ -6,7 +6,7 @@ use crate::types::{
     CallResult, CastResult, ContinueArg, ContinueResult, From, InfoResult, InitResult, ServerRef,
 };
 use async_trait::async_trait;
-use starlang_core::{ExitReason, Pid, Ref, SystemMessage, Term};
+use starlang_core::{ExitReason, Pid, RawTerm, Ref, SystemMessage, Term};
 use starlang_runtime::current_pid;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -101,7 +101,10 @@ pub trait GenServer: Sized + Send + Sync + 'static {
     async fn handle_cast(msg: Self::Cast, state: &mut Self::State) -> CastResult<Self::State>;
 
     /// Handles other messages (system messages, raw messages, etc.).
-    async fn handle_info(msg: Vec<u8>, state: &mut Self::State) -> InfoResult<Self::State>;
+    ///
+    /// The message is passed as a [`RawTerm`] which can be decoded using
+    /// `msg.decode::<T>()` to try to deserialize as a specific type.
+    async fn handle_info(msg: RawTerm, state: &mut Self::State) -> InfoResult<Self::State>;
 
     /// Handles continue instructions from init/call/cast results.
     async fn handle_continue(
@@ -277,7 +280,7 @@ async fn gen_server_loop<G: GenServer>(
             }
             Ok(GenServerMessage::Timeout) => {
                 // Synthesize a timeout info message
-                let result = G::handle_info(protocol::encode_timeout(), &mut state).await;
+                let result = G::handle_info(protocol::encode_timeout().into(), &mut state).await;
                 match handle_cast_result::<G>(result, &mut state) {
                     LoopAction::Continue => {}
                     LoopAction::ContinueTimeout(timeout) => {
@@ -325,7 +328,7 @@ async fn gen_server_loop<G: GenServer>(
                             reason: _,
                         } => {
                             // Monitor down - pass to handle_info
-                            let result = G::handle_info(msg, &mut state).await;
+                            let result = G::handle_info(msg.into(), &mut state).await;
                             match handle_cast_result::<G>(result, &mut state) {
                                 LoopAction::Continue => {}
                                 LoopAction::ContinueTimeout(timeout) => {
@@ -342,7 +345,7 @@ async fn gen_server_loop<G: GenServer>(
                         }
                         SystemMessage::Timeout => {
                             // System timeout
-                            let result = G::handle_info(msg, &mut state).await;
+                            let result = G::handle_info(msg.into(), &mut state).await;
                             match handle_cast_result::<G>(result, &mut state) {
                                 LoopAction::Continue => {}
                                 LoopAction::ContinueTimeout(timeout) => {
@@ -360,7 +363,7 @@ async fn gen_server_loop<G: GenServer>(
                     }
                 } else {
                     // Unknown message - pass to handle_info
-                    let result = G::handle_info(msg, &mut state).await;
+                    let result = G::handle_info(msg.into(), &mut state).await;
                     match handle_cast_result::<G>(result, &mut state) {
                         LoopAction::Continue => {}
                         LoopAction::ContinueTimeout(timeout) => {

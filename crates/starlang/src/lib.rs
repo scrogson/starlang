@@ -77,7 +77,7 @@
 //!         CastResult::NoReply(*state)
 //!     }
 //!
-//!     async fn handle_info(_ctx: &mut Context, _msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+//!     async fn handle_info(_msg: RawTerm, state: &mut i64) -> InfoResult<i64> {
 //!         InfoResult::NoReply(*state)
 //!     }
 //!
@@ -291,7 +291,7 @@ mod tests {
                 CastResult::NoReply(())
             }
 
-            async fn handle_info(_: Vec<u8>, state: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: RawTerm, state: &mut ()) -> InfoResult<()> {
                 let _ = state;
                 InfoResult::NoReply(())
             }

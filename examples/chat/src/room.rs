@@ -6,6 +6,7 @@
 use crate::protocol::HistoryMessage;
 use serde::{Deserialize, Serialize};
 use starlang::gen_server::prelude::*;
+use starlang::RawTerm;
 use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -120,7 +121,7 @@ impl GenServer for Room {
         }
     }
 
-    async fn handle_info(_msg: Vec<u8>, state: &mut RoomState) -> InfoResult<RoomState> {
+    async fn handle_info(_msg: RawTerm, state: &mut RoomState) -> InfoResult<RoomState> {
         CastResult::noreply(RoomState {
             name: state.name.clone(),
             history: state.history.clone(),

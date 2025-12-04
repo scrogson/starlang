@@ -8,6 +8,7 @@ use crate::protocol::RoomInfo;
 use serde::{Deserialize, Serialize};
 use starlang::dist::global;
 use starlang::gen_server::{self, prelude::*};
+use starlang::RawTerm;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -166,7 +167,7 @@ impl GenServer for Registry {
         })
     }
 
-    async fn handle_info(_msg: Vec<u8>, state: &mut RegistryState) -> InfoResult<RegistryState> {
+    async fn handle_info(_msg: RawTerm, state: &mut RegistryState) -> InfoResult<RegistryState> {
         CastResult::noreply(RegistryState {
             rooms: state.rooms.clone(),
         })

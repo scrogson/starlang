@@ -121,6 +121,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use starlang_core::RawTerm;
     use serde::{Deserialize, Serialize};
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::Arc;
@@ -180,7 +181,7 @@ mod tests {
             }
         }
 
-        async fn handle_info(_msg: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+        async fn handle_info(_msg: RawTerm, state: &mut i64) -> InfoResult<i64> {
             CastResult::noreply(*state)
         }
 
@@ -288,7 +289,7 @@ mod tests {
                 CastResult::noreply(())
             }
 
-            async fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: RawTerm, _: &mut ()) -> InfoResult<()> {
                 CastResult::noreply(())
             }
 
@@ -332,7 +333,7 @@ mod tests {
                 CastResult::noreply(())
             }
 
-            async fn handle_info(_: Vec<u8>, _: &mut ()) -> InfoResult<()> {
+            async fn handle_info(_: RawTerm, _: &mut ()) -> InfoResult<()> {
                 CastResult::noreply(())
             }
 
@@ -377,7 +378,7 @@ mod tests {
                 CastResult::noreply(*state)
             }
 
-            async fn handle_info(_: Vec<u8>, state: &mut i64) -> InfoResult<i64> {
+            async fn handle_info(_: RawTerm, state: &mut i64) -> InfoResult<i64> {
                 CastResult::noreply(*state)
             }
 
