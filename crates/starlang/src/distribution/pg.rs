@@ -249,12 +249,13 @@ impl ProcessGroups {
                     .collect();
 
                 if let Some(manager) = DIST_MANAGER.get()
-                    && let Some(tx) = manager.get_node_tx(from_node) {
-                        let msg = PgMessage::SyncResponse { groups };
-                        if let Ok(payload) = postcard::to_allocvec(&msg) {
-                            let _ = tx.try_send(DistMessage::ProcessGroups { payload });
-                        }
+                    && let Some(tx) = manager.get_node_tx(from_node)
+                {
+                    let msg = PgMessage::SyncResponse { groups };
+                    if let Ok(payload) = postcard::to_allocvec(&msg) {
+                        let _ = tx.try_send(DistMessage::ProcessGroups { payload });
                     }
+                }
             }
             PgMessage::SyncResponse { groups } => {
                 tracing::debug!(
@@ -310,32 +311,33 @@ impl ProcessGroups {
     /// Request sync from a newly connected node.
     pub fn request_sync(&self, node_atom: Atom) {
         if let Some(manager) = DIST_MANAGER.get()
-            && let Some(tx) = manager.get_node_tx(node_atom) {
-                // Ask them to send their group memberships to us
-                let msg = PgMessage::SyncRequest;
-                if let Ok(payload) = postcard::to_allocvec(&msg) {
+            && let Some(tx) = manager.get_node_tx(node_atom)
+        {
+            // Ask them to send their group memberships to us
+            let msg = PgMessage::SyncRequest;
+            if let Ok(payload) = postcard::to_allocvec(&msg) {
+                let _ = tx.try_send(DistMessage::ProcessGroups { payload });
+            }
+
+            // Also push our local memberships to them
+            let groups: Vec<(String, Vec<Pid>)> = self
+                .groups
+                .iter()
+                .map(|r| {
+                    let local_members: Vec<Pid> =
+                        r.value().iter().filter(|p| p.is_local()).copied().collect();
+                    (r.key().clone(), local_members)
+                })
+                .filter(|(_, members)| !members.is_empty())
+                .collect();
+
+            if !groups.is_empty() {
+                let response = PgMessage::SyncResponse { groups };
+                if let Ok(payload) = postcard::to_allocvec(&response) {
                     let _ = tx.try_send(DistMessage::ProcessGroups { payload });
                 }
-
-                // Also push our local memberships to them
-                let groups: Vec<(String, Vec<Pid>)> = self
-                    .groups
-                    .iter()
-                    .map(|r| {
-                        let local_members: Vec<Pid> =
-                            r.value().iter().filter(|p| p.is_local()).copied().collect();
-                        (r.key().clone(), local_members)
-                    })
-                    .filter(|(_, members)| !members.is_empty())
-                    .collect();
-
-                if !groups.is_empty() {
-                    let response = PgMessage::SyncResponse { groups };
-                    if let Ok(payload) = postcard::to_allocvec(&response) {
-                        let _ = tx.try_send(DistMessage::ProcessGroups { payload });
-                    }
-                }
             }
+        }
     }
 
     /// Broadcast a join to all connected nodes.
@@ -365,14 +367,15 @@ impl ProcessGroups {
     /// Broadcast a pg message to all connected nodes.
     fn broadcast_pg_message(&self, msg: &PgMessage) {
         if let Some(manager) = DIST_MANAGER.get()
-            && let Ok(payload) = postcard::to_allocvec(msg) {
-                let dist_msg = DistMessage::ProcessGroups { payload };
-                for node_atom in manager.connected_nodes() {
-                    if let Some(tx) = manager.get_node_tx(node_atom) {
-                        let _ = tx.try_send(dist_msg.clone());
-                    }
+            && let Ok(payload) = postcard::to_allocvec(msg)
+        {
+            let dist_msg = DistMessage::ProcessGroups { payload };
+            for node_atom in manager.connected_nodes() {
+                if let Some(tx) = manager.get_node_tx(node_atom) {
+                    let _ = tx.try_send(dist_msg.clone());
                 }
             }
+        }
     }
 }
 

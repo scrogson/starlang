@@ -214,14 +214,15 @@ impl Channel for RoomChannel {
                                 Duration::from_secs(5),
                             )
                             .await
-                            && !messages.is_empty() {
-                                tracing::debug!(
-                                    room = %socket.assigns.room_name,
-                                    message_count = messages.len(),
-                                    "Pushing history to user"
-                                );
-                                push(socket, "history", &RoomOutEvent::History { messages });
-                            }
+                        && !messages.is_empty()
+                    {
+                        tracing::debug!(
+                            room = %socket.assigns.room_name,
+                            message_count = messages.len(),
+                            "Pushing history to user"
+                        );
+                        push(socket, "history", &RoomOutEvent::History { messages });
+                    }
 
                     // Schedule a delayed message to push presence state
                     // This gives time for presence sync responses to arrive from other nodes
@@ -290,27 +291,26 @@ impl Channel for RoomChannel {
 
         // Try to decode as ChannelReply (broadcast from another user via pg)
         if let Some(reply) = msg.decode::<ChannelReply>()
-            && let ChannelReply::Push { event, payload, .. } = reply {
-                // Decode the room event from the payload bytes
-                if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
-                    match room_event {
-                        RoomOutEvent::PresenceSyncRequest { from_pid } => {
-                            // Forward to our internal handler
-                            if let Ok(info_msg) =
-                                postcard::to_allocvec(&ChannelInfo::PresenceSyncRequest {
-                                    from_pid,
-                                })
-                            {
-                                let _ = starlang::send_raw(socket.pid, info_msg);
-                            }
+            && let ChannelReply::Push { event, payload, .. } = reply
+        {
+            // Decode the room event from the payload bytes
+            if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
+                match room_event {
+                    RoomOutEvent::PresenceSyncRequest { from_pid } => {
+                        // Forward to our internal handler
+                        if let Ok(info_msg) =
+                            postcard::to_allocvec(&ChannelInfo::PresenceSyncRequest { from_pid })
+                        {
+                            let _ = starlang::send_raw(socket.pid, info_msg);
                         }
-                        _ => {
-                            // Other broadcasts are handled by the transport layer
-                            tracing::trace!(event = %event, "Received broadcast in handle_info");
-                        }
+                    }
+                    _ => {
+                        // Other broadcasts are handled by the transport layer
+                        tracing::trace!(event = %event, "Received broadcast in handle_info");
                     }
                 }
             }
+        }
 
         // Try to decode as PresenceMessage (delta from another node)
         if let Some(presence_msg) = msg.decode::<starlang::presence::PresenceMessage>() {

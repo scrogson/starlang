@@ -338,13 +338,14 @@ impl Session {
                             Duration::from_secs(5),
                         )
                         .await
-                        && !history_messages.is_empty() {
-                            self.send_event(ServerEvent::History {
-                                room: room_name.clone(),
-                                messages: history_messages,
-                            })
-                            .await;
-                        }
+                    && !history_messages.is_empty()
+                {
+                    self.send_event(ServerEvent::History {
+                        room: room_name.clone(),
+                        messages: history_messages,
+                    })
+                    .await;
+                }
 
                 self.send_event(ServerEvent::Joined {
                     room: room_name.clone(),

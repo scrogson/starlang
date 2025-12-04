@@ -129,12 +129,13 @@ impl GlobalRegistry {
                     .collect();
 
                 if let Some(manager) = DIST_MANAGER.get()
-                    && let Some(tx) = manager.get_node_tx(from_node) {
-                        let msg = GlobalRegistryMessage::SyncResponse { entries };
-                        if let Ok(payload) = postcard::to_allocvec(&msg) {
-                            let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
-                        }
+                    && let Some(tx) = manager.get_node_tx(from_node)
+                {
+                    let msg = GlobalRegistryMessage::SyncResponse { entries };
+                    if let Ok(payload) = postcard::to_allocvec(&msg) {
+                        let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
                     }
+                }
             }
             GlobalRegistryMessage::SyncResponse { entries } => {
                 tracing::debug!(count = entries.len(), from_node = %from_node, "Received global sync response");
@@ -168,40 +169,42 @@ impl GlobalRegistry {
     /// Broadcast a global registry message to all connected nodes.
     fn broadcast_global_message(&self, msg: &GlobalRegistryMessage) {
         if let Some(manager) = DIST_MANAGER.get()
-            && let Ok(payload) = postcard::to_allocvec(msg) {
-                let dist_msg = DistMessage::GlobalRegistry { payload };
-                for node_atom in manager.connected_nodes() {
-                    if let Some(tx) = manager.get_node_tx(node_atom) {
-                        let _ = tx.try_send(dist_msg.clone());
-                    }
+            && let Ok(payload) = postcard::to_allocvec(msg)
+        {
+            let dist_msg = DistMessage::GlobalRegistry { payload };
+            for node_atom in manager.connected_nodes() {
+                if let Some(tx) = manager.get_node_tx(node_atom) {
+                    let _ = tx.try_send(dist_msg.clone());
                 }
             }
+        }
     }
 
     /// Request sync from a newly connected node.
     pub fn request_sync(&self, node_atom: Atom) {
         if let Some(manager) = DIST_MANAGER.get()
-            && let Some(tx) = manager.get_node_tx(node_atom) {
-                // Ask them to send their registry to us
-                let msg = GlobalRegistryMessage::SyncRequest;
-                if let Ok(payload) = postcard::to_allocvec(&msg) {
+            && let Some(tx) = manager.get_node_tx(node_atom)
+        {
+            // Ask them to send their registry to us
+            let msg = GlobalRegistryMessage::SyncRequest;
+            if let Ok(payload) = postcard::to_allocvec(&msg) {
+                let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
+            }
+
+            // Also push our registry to them
+            let entries: Vec<(String, Pid)> = self
+                .names
+                .iter()
+                .map(|r| (r.key().clone(), *r.value()))
+                .collect();
+
+            if !entries.is_empty() {
+                let response = GlobalRegistryMessage::SyncResponse { entries };
+                if let Ok(payload) = postcard::to_allocvec(&response) {
                     let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
                 }
-
-                // Also push our registry to them
-                let entries: Vec<(String, Pid)> = self
-                    .names
-                    .iter()
-                    .map(|r| (r.key().clone(), *r.value()))
-                    .collect();
-
-                if !entries.is_empty() {
-                    let response = GlobalRegistryMessage::SyncResponse { entries };
-                    if let Ok(payload) = postcard::to_allocvec(&response) {
-                        let _ = tx.try_send(DistMessage::GlobalRegistry { payload });
-                    }
-                }
             }
+        }
     }
 }
 

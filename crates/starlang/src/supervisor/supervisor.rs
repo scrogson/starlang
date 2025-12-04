@@ -205,19 +205,20 @@ impl SupervisorState {
     /// Terminates a specific child by ID.
     async fn terminate_child_by_id(&mut self, id: &str) {
         if let Some(child) = self.children.get_mut(id)
-            && let Some(pid) = child.pid.take() {
-                self.pid_to_id.remove(&pid);
+            && let Some(pid) = child.pid.take()
+        {
+            self.pid_to_id.remove(&pid);
 
-                // Demonitor first using task-local context
-                if let Some(ref_) = child.monitor_ref.take() {
-                    crate::runtime::with_ctx(|ctx| ctx.demonitor(ref_));
-                }
-
-                // Send exit signal using task-local context
-                let _ = crate::runtime::with_ctx(|ctx| ctx.exit(pid, ExitReason::Shutdown));
-
-                // TODO: Wait for child to actually terminate with timeout
+            // Demonitor first using task-local context
+            if let Some(ref_) = child.monitor_ref.take() {
+                crate::runtime::with_ctx(|ctx| ctx.demonitor(ref_));
             }
+
+            // Send exit signal using task-local context
+            let _ = crate::runtime::with_ctx(|ctx| ctx.exit(pid, ExitReason::Shutdown));
+
+            // TODO: Wait for child to actually terminate with timeout
+        }
     }
 
     /// Starts all children in order.
@@ -295,11 +296,12 @@ async fn supervisor_loop(mut state: SupervisorState) {
             pid,
             reason,
         }) = <SystemMessage as Term>::decode(&msg)
-            && let Err(_exit_reason) = state.handle_child_exit(pid, reason).await {
-                // Supervisor needs to stop due to restart intensity
-                state.terminate_all_children().await;
-                return;
-            }
+            && let Err(_exit_reason) = state.handle_child_exit(pid, reason).await
+        {
+            // Supervisor needs to stop due to restart intensity
+            state.terminate_all_children().await;
+            return;
+        }
 
         // Check for exit signals
         if let Ok(SystemMessage::Exit { from: _, reason: _ }) =

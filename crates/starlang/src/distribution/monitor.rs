@@ -100,9 +100,10 @@ impl NodeMonitorRegistry {
     /// Remove a local monitor.
     pub fn remove_local_monitor(&self, monitor_ref: NodeMonitorRef) {
         if let Some((_, (node_atom, pid))) = self.monitor_refs.remove(&monitor_ref.0)
-            && let Some(mut monitors) = self.local_monitors.get_mut(&node_atom) {
-                monitors.remove(&(pid, monitor_ref.0));
-            }
+            && let Some(mut monitors) = self.local_monitors.get_mut(&node_atom)
+        {
+            monitors.remove(&(pid, monitor_ref.0));
+        }
     }
 
     /// Add a remote process monitoring this node.
@@ -135,9 +136,10 @@ impl NodeMonitorRegistry {
                 };
 
                 if let Ok(payload) = postcard::to_allocvec(&msg)
-                    && let Some(handle) = crate::process::global::try_handle() {
-                        let _ = handle.registry().send_raw(pid, payload);
-                    }
+                    && let Some(handle) = crate::process::global::try_handle()
+                {
+                    let _ = handle.registry().send_raw(pid, payload);
+                }
             }
         }
 
@@ -203,12 +205,13 @@ pub fn demonitor_node(monitor_ref: NodeMonitorRef) -> Result<(), DistError> {
 
     // Send DemonitorNode message to remote
     if let Some(node_atom) = node_atom
-        && let Some(tx) = manager.get_node_tx(node_atom) {
-            let msg = DistMessage::DemonitorNode {
-                requesting_pid: crate::runtime::current_pid(),
-            };
-            let _ = tx.try_send(msg);
-        }
+        && let Some(tx) = manager.get_node_tx(node_atom)
+    {
+        let msg = DistMessage::DemonitorNode {
+            requesting_pid: crate::runtime::current_pid(),
+        };
+        let _ = tx.try_send(msg);
+    }
 
     Ok(())
 }

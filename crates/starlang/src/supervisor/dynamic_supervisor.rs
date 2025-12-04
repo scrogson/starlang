@@ -262,10 +262,11 @@ async fn dynamic_supervisor_loop(state: Arc<SupervisorState>) {
         }) = <SystemMessage as Term>::decode(&msg)
         {
             if state.monitor_to_pid.contains_key(&monitor_ref)
-                && let Err(_exit_reason) = state.handle_child_exit(pid, reason).await {
-                    state.terminate_all_children();
-                    return;
-                }
+                && let Err(_exit_reason) = state.handle_child_exit(pid, reason).await
+            {
+                state.terminate_all_children();
+                return;
+            }
             continue;
         }
 
