@@ -199,7 +199,7 @@ impl GenServer for Presence {
                     .collect(),
                     leaves: HashMap::new(),
                 };
-                broadcast_delta(&state.pubsub, &topic, diff).await;
+                broadcast_delta(&state.pubsub, &state.name, &topic, diff).await;
 
                 CallResult::Reply(PresenceReply::Ok(Some(phx_ref)), std::mem::take(state))
             }
@@ -242,7 +242,7 @@ impl GenServer for Presence {
                         .into_iter()
                         .collect(),
                     };
-                    broadcast_delta(&state.pubsub, &topic, diff).await;
+                    broadcast_delta(&state.pubsub, &state.name, &topic, diff).await;
                 }
 
                 CallResult::Reply(PresenceReply::Ok(None), std::mem::take(state))
@@ -289,7 +289,7 @@ impl GenServer for Presence {
                                 .map(|(k, metas)| (k, PresenceState { metas }))
                                 .collect(),
                         };
-                        broadcast_delta(&state.pubsub, &topic, diff).await;
+                        broadcast_delta(&state.pubsub, &state.name, &topic, diff).await;
                     }
                 }
 
@@ -335,7 +335,7 @@ impl GenServer for Presence {
                             };
 
                             *m = new_meta;
-                            broadcast_delta(&state.pubsub, &topic, diff).await;
+                            broadcast_delta(&state.pubsub, &state.name, &topic, diff).await;
                             break;
                         }
                     }
@@ -393,28 +393,19 @@ impl GenServer for Presence {
         if let Ok(presence_msg) = postcard::from_bytes::<PresenceMessage>(msg.as_ref()) {
             match presence_msg {
                 PresenceMessage::Delta { topic, diff } => {
-                    tracing::debug!(
+                    tracing::trace!(
                         topic = %topic,
                         joins = diff.joins.len(),
                         leaves = diff.leaves.len(),
                         "Presence received delta from remote node, applying"
                     );
                     apply_delta(&state.state, &topic, diff);
-
-                    // Log state after applying delta
-                    if let Some(topic_state) = state.state.get(&topic) {
-                        tracing::debug!(
-                            topic = %topic,
-                            keys = ?topic_state.keys().collect::<Vec<_>>(),
-                            "Presence state after applying delta"
-                        );
-                    }
                 }
                 PresenceMessage::StateSync {
                     topic,
                     state: remote_state,
                 } => {
-                    tracing::debug!(
+                    tracing::trace!(
                         topic = %topic,
                         remote_keys = remote_state.len(),
                         "Presence received state sync from remote node, merging"
@@ -452,7 +443,7 @@ impl GenServer for Presence {
 }
 
 /// Broadcast a delta to other nodes via PubSub and to other Presence servers via pg.
-async fn broadcast_delta(pubsub: &str, topic: &str, diff: PresenceDiff) {
+async fn broadcast_delta(pubsub: &str, presence_name: &str, topic: &str, diff: PresenceDiff) {
     if diff.is_empty() {
         return;
     }
@@ -467,8 +458,8 @@ async fn broadcast_delta(pubsub: &str, topic: &str, diff: PresenceDiff) {
     let _ = PubSub::broadcast(pubsub, &presence_topic, &msg).await;
 
     // Also send to other Presence servers in the pg group so they can merge state
-    // The pg group name is "presence:{pubsub_name}"
-    let pg_group = format!("presence:{}", pubsub);
+    // The pg group name is "presence:{presence_name}" (e.g., "presence:chat_presence")
+    let pg_group = format!("presence:{}", presence_name);
     let members = pg::get_members(&pg_group);
     let self_pid = crate::current_pid();
     let my_node = crate::core::node::node_name_atom();

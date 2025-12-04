@@ -33,20 +33,33 @@ build-chat:
 # Chat Server Commands
 # ─────────────────────────────────────────────────────────────
 
-# Start chat server node1 (primary node)
+# Log directory for server logs
+log_dir := "logs"
+
+# Start chat server node1 (primary node) - logs to stdout and logs/node1.log
 node1:
+    #!/usr/bin/env bash
+    mkdir -p {{log_dir}}
     cargo run --manifest-path examples/chat/Cargo.toml --bin chat-server -- \
-        --name node1 --port 9999 --dist-port 9000
+        --name node1 --port 9999 --dist-port 9000 2>&1 | tee {{log_dir}}/node1.log
 
-# Start chat server node2 (connects to node1)
+# Start chat server node2 (connects to node1) - logs to stdout and logs/node2.log
 node2:
+    #!/usr/bin/env bash
+    mkdir -p {{log_dir}}
     cargo run --manifest-path examples/chat/Cargo.toml --bin chat-server -- \
-        --name node2 --port 9998 --dist-port 9001 --connect 127.0.0.1:9000
+        --name node2 --port 9998 --dist-port 9001 --connect 127.0.0.1:9000 2>&1 | tee {{log_dir}}/node2.log
 
-# Start chat server node3 (connects to node1)
+# Start chat server node3 (connects to node1) - logs to stdout and logs/node3.log
 node3:
+    #!/usr/bin/env bash
+    mkdir -p {{log_dir}}
     cargo run --manifest-path examples/chat/Cargo.toml --bin chat-server -- \
-        --name node3 --port 9997 --dist-port 9002 --connect 127.0.0.1:9000
+        --name node3 --port 9997 --dist-port 9002 --connect 127.0.0.1:9000 2>&1 | tee {{log_dir}}/node3.log
+
+# Clear all log files
+clear-logs:
+    rm -rf {{log_dir}}/*.log
 
 # Start a custom node: just node <name> <client-port> <dist-port> [connect-addr]
 node name client_port dist_port connect="":
