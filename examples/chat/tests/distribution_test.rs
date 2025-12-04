@@ -1,51 +1,71 @@
 //! Integration tests for distributed chat.
 //!
 //! Tests that rooms work correctly across multiple nodes.
+//! Uses the `starlang::peer` module for managing chat server peers.
 
+use serde::{Deserialize, Serialize};
+use starlang::peer::{Peer, PeerOptions, SpawnMethod};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
-/// Helper to start a chat server process.
-async fn start_server(
-    name: &str,
+/// Configuration for a chat server peer.
+struct ChatServerConfig {
+    name: String,
     port: u16,
     dist_port: u16,
     ws_port: u16,
     http_port: u16,
-    connect: Option<&str>,
-) -> Child {
+    connect: Option<String>,
+}
+
+impl ChatServerConfig {
+    fn new(name: &str, port: u16, dist_port: u16, ws_port: u16, http_port: u16) -> Self {
+        Self {
+            name: name.to_string(),
+            port,
+            dist_port,
+            ws_port,
+            http_port,
+            connect: None,
+        }
+    }
+
+    fn connect_to(mut self, peer_addr: &str) -> Self {
+        self.connect = Some(peer_addr.to_string());
+        self
+    }
+}
+
+/// Start a chat server peer using the peer module.
+async fn start_chat_peer(config: ChatServerConfig) -> Peer {
     // Use the debug binary (built by cargo test)
     // CARGO_MANIFEST_DIR points to examples/chat, so we go up two levels to workspace root
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
     let binary = workspace_root.join("target/debug/chat-server");
 
-    let mut cmd = Command::new(&binary);
-    cmd.arg("--name")
-        .arg(name)
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--dist-port")
-        .arg(dist_port.to_string())
-        .arg("--ws-port")
-        .arg(ws_port.to_string())
-        .arg("--http-port")
-        .arg(http_port.to_string());
+    let mut options = PeerOptions::new()
+        .name(&config.name)
+        .spawn_method(SpawnMethod::Executable(binary))
+        .dist_port(config.dist_port)
+        .port("port", config.port)
+        .port("ws-port", config.ws_port)
+        .port("http-port", config.http_port)
+        .env(
+            "RUST_LOG",
+            "info,starlang::distribution=debug,chat_server::session=debug,chat_server::channel=debug",
+        )
+        .boot_timeout(Duration::from_secs(10));
 
-    if let Some(peer) = connect {
-        cmd.arg("--connect").arg(peer);
+    if let Some(peer_addr) = config.connect {
+        options = options.arg("--connect").arg(peer_addr);
     }
 
-    cmd.env(
-        "RUST_LOG",
-        "info,starlang::distribution=debug,chat_server::session=debug,chat_server::channel=debug",
-    )
-    .kill_on_drop(true)
-    .spawn()
-    .unwrap_or_else(|e| panic!("Failed to start server from {:?}: {}", binary, e))
+    Peer::start_link(options)
+        .await
+        .expect("Failed to start chat server peer")
 }
 
 /// Helper to connect a client and return the stream.
@@ -98,7 +118,6 @@ fn decode_event(data: &[u8]) -> ServerEvent {
 }
 
 // Re-define the protocol types here for testing (must match src/protocol.rs exactly)
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum ClientCommand {
@@ -166,8 +185,9 @@ struct RoomInfo {
 
 #[tokio::test]
 async fn test_single_node_chat() {
-    // Start a single server
-    let mut server = start_server("node1", 19999, 19000, 14000, 18080, None).await;
+    // Start a single server using peer module
+    let config = ChatServerConfig::new("node1", 19999, 19000, 14000, 18080);
+    let _server = start_chat_peer(config).await;
 
     // Give server time to start
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -260,19 +280,20 @@ async fn test_single_node_chat() {
         resp
     );
 
-    // Clean up
-    server.kill().await.ok();
+    // Server is automatically cleaned up when _server goes out of scope (start_link)
 }
 
 #[tokio::test]
 async fn test_cross_node_global_registry() {
-    // Start node1
-    let mut node1 = start_server("node1", 29999, 29000, 24000, 28080, None).await;
+    // Start node1 using peer module
+    let config1 = ChatServerConfig::new("node1", 29999, 29000, 24000, 28080);
+    let _node1 = start_chat_peer(config1).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start node2 and connect to node1
-    let mut node2 =
-        start_server("node2", 29998, 29001, 24001, 28081, Some("127.0.0.1:29000")).await;
+    let config2 =
+        ChatServerConfig::new("node2", 29998, 29001, 24001, 28081).connect_to("127.0.0.1:29000");
+    let _node2 = start_chat_peer(config2).await;
     tokio::time::sleep(Duration::from_secs(2)).await; // Extra time for distribution handshake
 
     // Connect alice to node1
@@ -369,20 +390,20 @@ async fn test_cross_node_global_registry() {
         resp
     );
 
-    // Clean up
-    node1.kill().await.ok();
-    node2.kill().await.ok();
+    // Servers are automatically cleaned up when _node1 and _node2 go out of scope
 }
 
 #[tokio::test]
 async fn test_room_list_across_nodes() {
-    // Start node1
-    let mut node1 = start_server("node1", 39999, 39000, 34000, 38080, None).await;
+    // Start node1 using peer module
+    let config1 = ChatServerConfig::new("node1", 39999, 39000, 34000, 38080);
+    let _node1 = start_chat_peer(config1).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start node2 connected to node1
-    let mut node2 =
-        start_server("node2", 39998, 39001, 34001, 38081, Some("127.0.0.1:39000")).await;
+    let config2 =
+        ChatServerConfig::new("node2", 39998, 39001, 34001, 38081).connect_to("127.0.0.1:39000");
+    let _node2 = start_chat_peer(config2).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Connect alice to node1 and create a room
@@ -430,7 +451,5 @@ async fn test_room_list_across_nodes() {
         other => panic!("Expected RoomList event, got {:?}", other),
     }
 
-    // Clean up
-    node1.kill().await.ok();
-    node2.kill().await.ok();
+    // Servers are automatically cleaned up when _node1 and _node2 go out of scope
 }

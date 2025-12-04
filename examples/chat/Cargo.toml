@@ -15,7 +15,7 @@ name = "chat-client"
 path = "src/bin/chat-client.rs"
 
 [dependencies]
-starlang = { version = "0.1.0", path = "../../crates/starlang", features = ["websocket"] }
+starlang = { version = "0.1.0", path = "../../crates/starlang", features = ["websocket", "peer"] }
 
 async-trait = "0.1"
 tokio = { version = "1", features = ["full", "net", "io-util", "sync"] }

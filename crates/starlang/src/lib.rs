@@ -157,6 +157,12 @@ pub mod channel;
 /// Distributed Presence tracking for real-time applications.
 pub mod presence;
 
+/// Peer node management for spawning and controlling linked nodes.
+///
+/// This module is only available when the `peer` feature is enabled.
+#[cfg(feature = "peer")]
+pub mod peer;
+
 /// Alias for distribution module.
 pub use distribution as dist;
 

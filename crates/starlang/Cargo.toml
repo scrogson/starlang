@@ -40,6 +40,7 @@ futures = { version = "0.3", optional = true }
 [features]
 default = []
 websocket = ["tokio-tungstenite", "serde_json", "futures"]
+peer = ["tokio/process"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
