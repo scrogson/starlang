@@ -131,6 +131,9 @@ pub mod process;
 /// GenServer pattern for stateful request/response servers.
 pub mod gen_server;
 
+/// GenFsm pattern for finite state machines.
+pub mod gen_fsm;
+
 /// Supervisor pattern for fault-tolerant process trees.
 pub mod supervisor;
 
