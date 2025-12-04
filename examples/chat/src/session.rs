@@ -109,7 +109,7 @@ impl Session {
         // First, check if this is a presence message and apply it to the tracker
         if let Ok(presence_msg) = postcard::from_bytes::<starlang::presence::PresenceMessage>(data)
         {
-            let from_node = starlang_core::node::node_name_atom();
+            let from_node = starlang::core::node::node_name_atom();
             starlang::presence::tracker().handle_message(presence_msg, from_node);
             // Don't return - continue processing in case it's also a channel message
         }

@@ -58,7 +58,7 @@ use crate::dist::pg;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use starlang_core::{Atom, Pid};
+use crate::core::{Atom, Pid};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -81,7 +81,7 @@ impl PresenceRef {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let node_atom = starlang_core::node::node_name_atom();
+        let node_atom = crate::core::node::node_name_atom();
         let node = node_atom.as_str().to_string();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -429,7 +429,7 @@ impl PresenceTracker {
             // Use pg to broadcast to presence group
             let group = format!("presence:{}", topic);
             let members = pg::get_members(&group);
-            let my_node = starlang_core::node::node_name_atom();
+            let my_node = crate::core::node::node_name_atom();
 
             for pid in members {
                 // Don't send to ourselves (different node)
@@ -551,7 +551,7 @@ impl PresenceTracker {
         if let Ok(payload) = postcard::to_allocvec(&msg) {
             let group = format!("presence:{}", topic);
             let members = pg::get_members(&group);
-            let my_node = starlang_core::node::node_name_atom();
+            let my_node = crate::core::node::node_name_atom();
 
             for pid in members {
                 // Don't send to ourselves (different node)

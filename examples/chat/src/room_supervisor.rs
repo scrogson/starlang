@@ -8,8 +8,8 @@ use crate::room::{Room, RoomInit};
 use starlang::dist::global;
 use starlang::gen_server;
 use starlang::Pid;
-use starlang_supervisor::dynamic_supervisor::{self, DynamicSupervisorOpts};
-use starlang_supervisor::{ChildSpec, RestartType, StartChildError};
+use starlang::supervisor::dynamic_supervisor::{self, DynamicSupervisorOpts};
+use starlang::supervisor::{ChildSpec, RestartType, StartChildError, StartError};
 use std::sync::OnceLock;
 
 /// Global room supervisor PID.
@@ -21,14 +21,14 @@ pub const NAME: &str = "room_supervisor";
 /// Starts the room supervisor.
 ///
 /// This should be called once during application startup.
-pub async fn start() -> Result<Pid, starlang_supervisor::StartError> {
+pub async fn start() -> Result<Pid, StartError> {
     let opts = DynamicSupervisorOpts::new().max_restarts(10).max_seconds(5);
 
     let pid = dynamic_supervisor::start(opts).await?;
 
     ROOM_SUPERVISOR
         .set(pid)
-        .map_err(|_| starlang_supervisor::StartError::InitFailed("already started".to_string()))?;
+        .map_err(|_| StartError::InitFailed("already started".to_string()))?;
 
     Ok(pid)
 }

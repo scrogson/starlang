@@ -34,7 +34,7 @@
 use serde::Serialize;
 use starlang::dist::pg;
 use starlang::registry::Registry;
-use starlang_core::Pid;
+use starlang::Pid;
 use std::sync::{Arc, OnceLock};
 
 /// Global local registry for pub/sub subscriptions.

@@ -3,7 +3,7 @@
 //! Defines the message types sent between nodes.
 
 use serde::{Deserialize, Serialize};
-use starlang_core::{Atom, Pid};
+use crate::core::{Atom, Pid};
 use std::fmt;
 
 /// Distribution protocol messages.

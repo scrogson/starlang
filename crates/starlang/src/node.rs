@@ -37,8 +37,9 @@
 
 use crate::distribution::protocol::DistMessage;
 use crate::distribution::{self, DistError, NodeMonitorRef};
-use starlang_core::node::{is_distributed, node_name, NodeName};
-use starlang_core::{Atom, Pid};
+use crate::core::node::{is_distributed, node_name, NodeName};
+use crate::core::{Pid};
+use crate::atom::Atom;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -112,7 +113,7 @@ pub fn current() -> Option<&'static NodeName> {
 ///
 /// Returns the empty atom if distribution hasn't been initialized.
 pub fn current_atom() -> Atom {
-    starlang_core::node::node_name_atom()
+    crate::core::node::node_name_atom()
 }
 
 /// Establishes a connection to another node.
@@ -303,7 +304,7 @@ pub fn demonitor(mon_ref: NodeMonitorRef) -> Result<(), DistError> {
 /// # Returns
 ///
 /// `Some(NodeInfo)` if connected, `None` otherwise.
-pub fn info(node: Atom) -> Option<starlang_core::NodeInfo> {
+pub fn info(node: Atom) -> Option<crate::core::NodeInfo> {
     distribution::node_info(node)
 }
 
@@ -408,7 +409,7 @@ pub async fn spawn_monitor(
     _module: &str,
     _function: &str,
     _args: Vec<u8>,
-) -> Result<(Pid, starlang_core::Ref), DistError> {
+) -> Result<(Pid, crate::core::Ref), DistError> {
     Err(DistError::Connect(
         "remote spawn_monitor not yet implemented".to_string(),
     ))

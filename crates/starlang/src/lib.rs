@@ -54,12 +54,11 @@
 //!     type Cast = ();
 //!     type Reply = i64;
 //!
-//!     async fn init(_ctx: &mut Context, initial: i64) -> InitResult<i64> {
+//!     async fn init(initial: i64) -> InitResult<i64> {
 //!         InitResult::Ok(initial)
 //!     }
 //!
 //!     async fn handle_call(
-//!         _ctx: &mut Context,
 //!         request: CounterCall,
 //!         _from: From,
 //!         state: &mut i64,
@@ -73,7 +72,7 @@
 //!         }
 //!     }
 //!
-//!     async fn handle_cast(_ctx: &mut Context, _msg: (), state: &mut i64) -> CastResult<i64> {
+//!     async fn handle_cast(_msg: (), state: &mut i64) -> CastResult<i64> {
 //!         CastResult::NoReply(*state)
 //!     }
 //!
@@ -81,7 +80,7 @@
 //!         InfoResult::NoReply(*state)
 //!     }
 //!
-//!     async fn handle_continue(_ctx: &mut Context, _arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
+//!     async fn handle_continue(_arg: ContinueArg, state: &mut i64) -> ContinueResult<i64> {
 //!         ContinueResult::NoReply(*state)
 //!     }
 //! }
@@ -113,63 +112,77 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-// Allow dead_code in distribution module until fully integrated
+// =============================================================================
+// Core modules (merged from separate crates)
+// =============================================================================
+
+/// Interned strings for efficient comparison.
+pub mod atom;
+
+/// Core types: Pid, Ref, Term, ExitReason, SystemMessage.
+pub mod core;
+
+/// Runtime infrastructure: mailbox, context, process registry.
+pub mod runtime;
+
+/// Process primitives: spawn, link, monitor.
+pub mod process;
+
+/// GenServer pattern for stateful request/response servers.
+pub mod gen_server;
+
+/// Supervisor pattern for fault-tolerant process trees.
+pub mod supervisor;
+
+/// Application lifecycle management.
+pub mod application;
+
+// =============================================================================
+// Additional modules
+// =============================================================================
+
+/// Distribution layer for connecting Starlang nodes.
 #[allow(dead_code)]
 pub mod distribution;
 
 /// Elixir-compatible Node API for distributed Starlang.
-///
-/// See [`node`] module for details.
 pub mod node;
 
 /// Local process registry with pub/sub support.
-///
-/// See [`registry`] module for details.
 pub mod registry;
 
 /// Phoenix-style Channels for real-time communication.
-///
-/// See [`channel`] module for details.
 pub mod channel;
 
 /// Distributed Presence tracking for real-time applications.
-///
-/// See [`presence`] module for details.
 pub mod presence;
 
-/// Distribution module for connecting Starlang nodes.
-///
-/// See [`distribution`] module for details.
+/// Alias for distribution module.
 pub use distribution as dist;
 
-// Re-export global runtime functions from starlang_process
-pub use starlang_process::global::{
+// =============================================================================
+// Re-exports for convenient top-level access
+// =============================================================================
+
+// Re-export global runtime functions from process module
+pub use process::global::{
     alive, handle, init, register, spawn, spawn_link, try_handle, unregister, whereis,
 };
 
 // Re-export task-local functions for process operations without ctx
-pub use starlang_runtime::{
+pub use runtime::{
     current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
     with_ctx_async,
 };
 
 // Re-export core types
-pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
+pub use core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
 
 // Re-export runtime and process types
-pub use starlang_process::{Runtime, RuntimeHandle};
-pub use starlang_runtime::Context;
+pub use process::{Runtime, RuntimeHandle};
+pub use runtime::Context;
 
-// Re-export GenServer
-pub use starlang_gen_server as gen_server;
-
-// Re-export Supervisor
-pub use starlang_supervisor as supervisor;
-
-// Re-export Application
-pub use starlang_application as application;
-
-// Re-export macros
+// Re-export macros (from separate proc-macro crate)
 pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 
 /// Prelude module for convenient imports.
@@ -180,31 +193,31 @@ pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 /// ```
 pub mod prelude {
     // Core types
-    pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
+    pub use crate::core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
 
     // Runtime and process
-    pub use starlang_process::{Runtime, RuntimeHandle};
-    pub use starlang_runtime::Context;
+    pub use crate::process::{Runtime, RuntimeHandle};
+    pub use crate::runtime::Context;
 
     // GenServer essentials
-    pub use starlang_gen_server::{
+    pub use crate::gen_server::{
         CallResult, CastResult, ContinueArg, ContinueResult, From, GenServer, InfoResult,
         InitResult, NameResolver, ServerRef,
     };
 
     // Supervisor essentials
-    pub use starlang_supervisor::{
+    pub use crate::supervisor::{
         ChildSpec, ChildType, RestartType, ShutdownType, Strategy, Supervisor, SupervisorFlags,
     };
 
     // Application essentials
-    pub use starlang_application::{AppConfig, AppController, AppSpec, Application, StartResult};
+    pub use crate::application::{AppConfig, AppController, AppSpec, Application, StartResult};
 
     // Macros
     pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 
     // Task-local functions for process operations without ctx
-    pub use starlang_runtime::{
+    pub use crate::runtime::{
         current_pid, recv, recv_timeout, send, send_raw, try_current_pid, try_recv, with_ctx,
         with_ctx_async,
     };
@@ -248,8 +261,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_gen_server_integration() {
+        use crate::gen_server::async_trait;
         use serde::{Deserialize, Serialize};
-        use starlang_gen_server::async_trait;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use std::time::Duration;
@@ -306,14 +319,14 @@ mod tests {
         let handle = crate::handle();
 
         // Start the server
-        let server_pid = starlang_gen_server::start::<TestServer>(()).await.unwrap();
+        let server_pid = crate::gen_server::start::<TestServer>(()).await.unwrap();
 
         // We need to call from within a process since `call` requires task-local context
         let test_passed = Arc::new(AtomicBool::new(false));
         let test_passed_clone = test_passed.clone();
 
         handle.spawn(move || async move {
-            let reply: String = starlang_gen_server::call::<TestServer>(
+            let reply: String = crate::gen_server::call::<TestServer>(
                 server_pid,
                 TestCall::Ping,
                 Duration::from_secs(5),

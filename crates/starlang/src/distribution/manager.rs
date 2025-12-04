@@ -9,7 +9,7 @@ use super::transport::{QuicConnection, QuicTransport};
 use super::DIST_MANAGER;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use starlang_core::{Atom, NodeInfo, NodeName, Pid};
+use crate::core::{Atom, NodeInfo, NodeName, Pid};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -188,7 +188,7 @@ impl DistributionManager {
                 let node_atom = Atom::new(&node_name);
                 let info = NodeInfo::new(
                     NodeName::new(&node_name),
-                    starlang_core::NodeId::local(), // NodeId is just for display now
+                    crate::core::NodeId::local(), // NodeId is just for display now
                     Some(addr),
                     creation,
                 );
@@ -229,7 +229,7 @@ impl DistributionManager {
         if let Some(node) = self.nodes.get(&node_atom) {
             let msg = DistMessage::Send {
                 to: pid,
-                from: starlang_runtime::try_current_pid(),
+                from: crate::runtime::try_current_pid(),
                 payload,
             };
 
@@ -332,7 +332,7 @@ async fn handle_incoming_connection(
 
     let info = NodeInfo::new(
         NodeName::new(&remote_name),
-        starlang_core::NodeId::local(), // NodeId is just for display now
+        crate::core::NodeId::local(), // NodeId is just for display now
         Some(addr),
         remote_creation,
     );
@@ -461,7 +461,7 @@ async fn handle_incoming_message(from_node: Atom, msg: DistMessage) {
             // If it matches our node name, deliver locally.
             if to.is_local() {
                 // Deliver to local process
-                if let Some(handle) = starlang_process::global::try_handle() {
+                if let Some(handle) = crate::process::global::try_handle() {
                     let _ = handle.registry().send_raw(to, payload);
                 }
             } else {

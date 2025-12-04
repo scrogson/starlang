@@ -375,7 +375,7 @@ where
         }
     }
 
-    async fn handle_info(&self, msg: starlang_core::RawTerm, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
+    async fn handle_info(&self, msg: crate::core::RawTerm, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
         let assigns: C::Assigns = match serde_json::from_slice(&socket.assigns) {
             Ok(a) => a,
             Err(_) => return HandleResult::NoReply,
@@ -595,7 +595,7 @@ async fn handle_connection(
                     } else {
                         // Check if this is a presence message and apply it to the tracker
                         if let Ok(presence_msg) = postcard::from_bytes::<crate::presence::PresenceMessage>(&msg_bytes) {
-                            let from_node = starlang_core::node::node_name_atom();
+                            let from_node = crate::core::node::node_name_atom();
                             crate::presence::tracker().handle_message(presence_msg, from_node);
                         }
 

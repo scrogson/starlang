@@ -6,7 +6,7 @@ use super::protocol::{DistError, DistMessage};
 use super::DIST_MANAGER;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use starlang_core::{Atom, Pid};
+use crate::core::{Atom, Pid};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -136,7 +136,7 @@ impl NodeMonitorRegistry {
                 };
 
                 if let Ok(payload) = postcard::to_allocvec(&msg) {
-                    if let Some(handle) = starlang_process::global::try_handle() {
+                    if let Some(handle) = crate::process::global::try_handle() {
                         let _ = handle.registry().send_raw(pid, payload);
                     }
                 }
@@ -173,7 +173,7 @@ impl Default for NodeMonitorRegistry {
 /// ```
 pub fn monitor_node(node_atom: Atom) -> Result<NodeMonitorRef, DistError> {
     let manager = DIST_MANAGER.get().ok_or(DistError::NotInitialized)?;
-    let pid = starlang_runtime::current_pid();
+    let pid = crate::runtime::current_pid();
 
     let monitor_ref = manager.monitors().add_local_monitor(node_atom, pid);
 
@@ -207,7 +207,7 @@ pub fn demonitor_node(monitor_ref: NodeMonitorRef) -> Result<(), DistError> {
     if let Some(node_atom) = node_atom {
         if let Some(tx) = manager.get_node_tx(node_atom) {
             let msg = DistMessage::DemonitorNode {
-                requesting_pid: starlang_runtime::current_pid(),
+                requesting_pid: crate::runtime::current_pid(),
             };
             let _ = tx.try_send(msg);
         }

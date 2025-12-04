@@ -53,7 +53,7 @@
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use starlang_core::Pid;
+use crate::core::Pid;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -311,7 +311,7 @@ where
 
 // Implement NameResolver for Registry<Vec<u8>, V> so it can be used with ServerRef::via()
 // Keys are stored as serialized bytes, allowing any Term type to be used as a key.
-impl<V> starlang_gen_server::NameResolver for Registry<Vec<u8>, V>
+impl<V> crate::gen_server::NameResolver for Registry<Vec<u8>, V>
 where
     V: Clone + Send + Sync + Default + 'static,
 {

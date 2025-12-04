@@ -3,9 +3,9 @@
 use super::manager::{send_remote, DistributionManager};
 use super::protocol::DistError;
 use super::DIST_MANAGER;
-use starlang_core::node::{init_node, NodeName};
-use starlang_core::Pid;
-use starlang_runtime::SendError;
+use crate::core::node::{init_node, NodeName};
+use crate::core::Pid;
+use crate::runtime::SendError;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -135,7 +135,7 @@ pub async fn init_distribution(config: Config) -> Result<(), DistError> {
         .map_err(|_| DistError::Connect("distribution already initialized".to_string()))?;
 
     // Register the remote send hook with dream-runtime
-    let _ = starlang_runtime::set_remote_send_hook(remote_send_hook);
+    let _ = crate::runtime::set_remote_send_hook(remote_send_hook);
 
     // Start listening if an address was provided
     if let Some(addr) = listen_addr {

@@ -14,9 +14,8 @@ categories = ["concurrency", "asynchronous"]
 
 [workspace.dependencies]
 # Internal crates
-starlang-core = { version = "0.1.0", path = "crates/starlang-core" }
-starlang-runtime = { version = "0.1.0", path = "crates/starlang-runtime" }
-starlang-process = { version = "0.1.0", path = "crates/starlang-process" }
+starlang = { version = "0.1.0", path = "crates/starlang" }
+starlang-macros = { version = "0.1.0", path = "crates/starlang-macros" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

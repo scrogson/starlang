@@ -1,7 +1,7 @@
 [package]
 name = "starlang-chat"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 description = "Multi-user chat application example using Starlang"
 license.workspace = true
 publish = false
@@ -16,11 +16,6 @@ path = "src/bin/chat-client.rs"
 
 [dependencies]
 starlang = { version = "0.1.0", path = "../../crates/starlang", features = ["websocket"] }
-starlang-core = { version = "0.1.0", path = "../../crates/starlang-core" }
-starlang-runtime = { version = "0.1.0", path = "../../crates/starlang-runtime" }
-starlang-process = { version = "0.1.0", path = "../../crates/starlang-process" }
-starlang-gen-server = { version = "0.1.0", path = "../../crates/starlang-gen-server" }
-starlang-supervisor = { version = "0.1.0", path = "../../crates/starlang-supervisor" }
 
 async-trait = "0.1"
 tokio = { version = "1", features = ["full", "net", "io-util", "sync"] }

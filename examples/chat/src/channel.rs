@@ -311,7 +311,7 @@ impl Channel for RoomChannel {
         // Try to decode as PresenceMessage (delta from another node)
         if let Some(presence_msg) = msg.decode::<starlang::presence::PresenceMessage>() {
             // Apply the presence delta to the global tracker
-            let from_node = starlang_core::node::node_name_atom(); // TODO: get actual source node
+            let from_node = starlang::core::node::node_name_atom(); // TODO: get actual source node
             starlang::presence::tracker().handle_message(presence_msg, from_node);
         }
 

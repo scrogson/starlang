@@ -3,7 +3,7 @@
 use crate::dist::pg;
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use starlang_core::{Pid, RawTerm};
+use crate::core::{Pid, RawTerm};
 use std::collections::HashMap;
 use std::sync::Arc;
 
