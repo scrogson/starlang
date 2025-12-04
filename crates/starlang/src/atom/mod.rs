@@ -164,19 +164,40 @@ impl<'de> Deserialize<'de> for Atom {
     }
 }
 
-/// Create an atom from a string literal.
+/// Create an atom from a string literal or format string.
 ///
-/// # Example
+/// Supports full `format!` syntax including captured variables (Rust 2021+).
+///
+/// # Examples
 ///
 /// ```
 /// use starlang::atom;
 ///
+/// // Simple literal
 /// let node = atom!("node1@localhost");
+///
+/// // Format string (like format!)
+/// let name = "general";
+/// let room = atom!("room:{}", name);
+/// assert_eq!(room.as_str(), "room:general");
+///
+/// // Captured variable syntax (Rust 2021+)
+/// let topic = "lobby";
+/// let room = atom!("room:{topic}");
+/// assert_eq!(room.as_str(), "room:lobby");
+///
+/// // Multiple arguments
+/// let prefix = "user";
+/// let id = 42;
+/// let user = atom!("{}:{}", prefix, id);
+/// assert_eq!(user.as_str(), "user:42");
 /// ```
 #[macro_export]
 macro_rules! atom {
-    ($s:expr) => {
-        $crate::atom::Atom::new($s)
+    // Use format! for everything - it handles both plain literals
+    // and format strings with captured variables
+    ($($arg:tt)*) => {
+        $crate::atom::Atom::new(&format!($($arg)*))
     };
 }
 
@@ -233,5 +254,34 @@ mod tests {
         let serialized = postcard::to_allocvec(&original).unwrap();
         let deserialized: Atom = postcard::from_bytes(&serialized).unwrap();
         assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn test_atom_format() {
+        // Single argument
+        let name = "general";
+        let room = atom!("room:{}", name);
+        assert_eq!(room.as_str(), "room:general");
+
+        // Multiple arguments
+        let prefix = "user";
+        let id = 42;
+        let user = atom!("{}:{}", prefix, id);
+        assert_eq!(user.as_str(), "user:42");
+
+        // With Display types
+        let pid_str = "0.1.0";
+        let key = atom!("user:<{}>", pid_str);
+        assert_eq!(key.as_str(), "user:<0.1.0>");
+
+        // Interning still works
+        let a1 = atom!("prefix:{}", "value");
+        let a2 = atom!("prefix:value");
+        assert_eq!(a1, a2);
+
+        // Captured variable syntax (Rust 2021+)
+        let somevar = "lobby";
+        let captured = atom!("room:{somevar}");
+        assert_eq!(captured.as_str(), "room:lobby");
     }
 }
