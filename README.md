@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/scrogson/starlang/main/assets/starlang.png" alt="Starlang Logo" width="200">
+</p>
+
 # Starlang - Erlang-style Concurrency for Rust
 
 A native Rust implementation of Erlang/OTP primitives, bringing the power of the BEAM's concurrency model to Rust with full type safety.
