@@ -294,4 +294,251 @@ mod tests {
         sleep(Duration::from_millis(50)).await;
         assert_eq!(cycle_count.load(Ordering::SeqCst), 1);
     }
+
+    // =========================================================================
+    // StateAction Tests
+    // =========================================================================
+
+    /// FSM that tests StateActions including generic timeouts
+    struct ActionFsm;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    enum ActionState {
+        Waiting,
+        Processing,
+        Complete,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    enum ActionEvent {
+        Start,
+        Process,
+        Done,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    enum ActionCall {
+        GetState,
+        GetCounter,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    enum ActionReply {
+        State(ActionState),
+        Counter(u32),
+    }
+
+    #[derive(Debug, Default)]
+    struct ActionData {
+        counter: u32,
+    }
+
+    #[async_trait]
+    impl GenFsm for ActionFsm {
+        type State = ActionState;
+        type Event = ActionEvent;
+        type Data = ActionData;
+        type InitArg = ();
+        type Call = ActionCall;
+        type Reply = ActionReply;
+
+        async fn init(_arg: ()) -> InitResult<ActionState, ActionData> {
+            InitResult::ok(ActionState::Waiting, ActionData::default())
+        }
+
+        async fn handle_event(
+            state: &ActionState,
+            event: ActionEvent,
+            data: &mut ActionData,
+        ) -> EventResult<ActionState, ActionReply> {
+            match (state, event) {
+                (ActionState::Waiting, ActionEvent::Start) => {
+                    // Transition with a generic timeout action
+                    EventResult::next_state_actions(
+                        ActionState::Processing,
+                        vec![StateAction::GenericTimeout(
+                            "process_timeout".to_string(),
+                            Duration::from_millis(100),
+                        )],
+                    )
+                }
+                (ActionState::Processing, ActionEvent::Process) => {
+                    data.counter += 1;
+                    EventResult::keep_state()
+                }
+                (ActionState::Processing, ActionEvent::Done) => {
+                    // Cancel the timeout and transition
+                    EventResult::next_state_actions(
+                        ActionState::Complete,
+                        vec![StateAction::CancelTimeout("process_timeout".to_string())],
+                    )
+                }
+                _ => EventResult::keep_state(),
+            }
+        }
+
+        async fn handle_call(
+            state: &ActionState,
+            request: ActionCall,
+            _from: From,
+            data: &mut ActionData,
+        ) -> CallResult<ActionState, ActionReply> {
+            match request {
+                ActionCall::GetState => CallResult::reply(ActionReply::State(*state), *state),
+                ActionCall::GetCounter => {
+                    CallResult::reply(ActionReply::Counter(data.counter), *state)
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fsm_state_actions() {
+        crate::process::global::init();
+        let handle = crate::process::global::handle();
+
+        let pid = start::<ActionFsm>(()).await.unwrap();
+
+        // Initial state should be Waiting
+        let state = Arc::new(AtomicU32::new(0)); // 0=Waiting, 1=Processing, 2=Complete
+        {
+            let state = state.clone();
+            handle.spawn(move || async move {
+                if let Ok(ActionReply::State(s)) =
+                    call::<ActionFsm>(pid, ActionCall::GetState, Duration::from_secs(5)).await
+                {
+                    let val = match s {
+                        ActionState::Waiting => 0,
+                        ActionState::Processing => 1,
+                        ActionState::Complete => 2,
+                    };
+                    state.store(val, Ordering::SeqCst);
+                }
+            });
+        }
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(state.load(Ordering::SeqCst), 0); // Waiting
+
+        // Send Start event to transition to Processing
+        send_event::<ActionFsm>(pid, ActionEvent::Start).unwrap();
+        sleep(Duration::from_millis(50)).await;
+
+        {
+            let state = state.clone();
+            handle.spawn(move || async move {
+                if let Ok(ActionReply::State(s)) =
+                    call::<ActionFsm>(pid, ActionCall::GetState, Duration::from_secs(5)).await
+                {
+                    let val = match s {
+                        ActionState::Waiting => 0,
+                        ActionState::Processing => 1,
+                        ActionState::Complete => 2,
+                    };
+                    state.store(val, Ordering::SeqCst);
+                }
+            });
+        }
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(state.load(Ordering::SeqCst), 1); // Processing
+
+        // Send Done to complete
+        send_event::<ActionFsm>(pid, ActionEvent::Done).unwrap();
+        sleep(Duration::from_millis(50)).await;
+
+        {
+            let state = state.clone();
+            handle.spawn(move || async move {
+                if let Ok(ActionReply::State(s)) =
+                    call::<ActionFsm>(pid, ActionCall::GetState, Duration::from_secs(5)).await
+                {
+                    let val = match s {
+                        ActionState::Waiting => 0,
+                        ActionState::Processing => 1,
+                        ActionState::Complete => 2,
+                    };
+                    state.store(val, Ordering::SeqCst);
+                }
+            });
+        }
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(state.load(Ordering::SeqCst), 2); // Complete
+    }
+
+    #[tokio::test]
+    async fn test_fsm_enter_exit_callbacks() {
+        use std::sync::atomic::AtomicBool;
+
+        static ENTERED_RED: AtomicBool = AtomicBool::new(false);
+        static EXITED_RED: AtomicBool = AtomicBool::new(false);
+        static ENTERED_GREEN: AtomicBool = AtomicBool::new(false);
+
+        struct CallbackFsm;
+
+        #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+        enum CbState {
+            Red,
+            Green,
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        enum CbEvent {
+            Switch,
+        }
+
+        #[async_trait]
+        impl GenFsm for CallbackFsm {
+            type State = CbState;
+            type Event = CbEvent;
+            type Data = ();
+            type InitArg = ();
+            type Call = ();
+            type Reply = ();
+
+            async fn init(_: ()) -> InitResult<CbState, ()> {
+                InitResult::ok(CbState::Red, ())
+            }
+
+            async fn handle_event(
+                state: &CbState,
+                _event: CbEvent,
+                _data: &mut (),
+            ) -> EventResult<CbState, ()> {
+                match state {
+                    CbState::Red => EventResult::next_state(CbState::Green),
+                    CbState::Green => EventResult::next_state(CbState::Red),
+                }
+            }
+
+            async fn enter_state(state: &CbState, _data: &mut ()) {
+                match state {
+                    CbState::Red => ENTERED_RED.store(true, Ordering::SeqCst),
+                    CbState::Green => ENTERED_GREEN.store(true, Ordering::SeqCst),
+                }
+            }
+
+            async fn exit_state(state: &CbState, _data: &mut ()) {
+                match state {
+                    CbState::Red => EXITED_RED.store(true, Ordering::SeqCst),
+                    CbState::Green => {}
+                }
+            }
+        }
+
+        crate::process::global::init();
+
+        let pid = start::<CallbackFsm>(()).await.unwrap();
+
+        // enter_state should be called for initial state
+        sleep(Duration::from_millis(50)).await;
+        assert!(ENTERED_RED.load(Ordering::SeqCst));
+        assert!(!EXITED_RED.load(Ordering::SeqCst));
+        assert!(!ENTERED_GREEN.load(Ordering::SeqCst));
+
+        // Transition Red -> Green
+        send_event::<CallbackFsm>(pid, CbEvent::Switch).unwrap();
+        sleep(Duration::from_millis(50)).await;
+
+        assert!(EXITED_RED.load(Ordering::SeqCst));
+        assert!(ENTERED_GREEN.load(Ordering::SeqCst));
+    }
 }
