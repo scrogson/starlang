@@ -9,7 +9,14 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 /// Helper to start a chat server process.
-async fn start_server(name: &str, port: u16, dist_port: u16, connect: Option<&str>) -> Child {
+async fn start_server(
+    name: &str,
+    port: u16,
+    dist_port: u16,
+    ws_port: u16,
+    http_port: u16,
+    connect: Option<&str>,
+) -> Child {
     // Use the debug binary (built by cargo test)
     // CARGO_MANIFEST_DIR points to examples/chat, so we go up two levels to workspace root
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -22,16 +29,23 @@ async fn start_server(name: &str, port: u16, dist_port: u16, connect: Option<&st
         .arg("--port")
         .arg(port.to_string())
         .arg("--dist-port")
-        .arg(dist_port.to_string());
+        .arg(dist_port.to_string())
+        .arg("--ws-port")
+        .arg(ws_port.to_string())
+        .arg("--http-port")
+        .arg(http_port.to_string());
 
     if let Some(peer) = connect {
         cmd.arg("--connect").arg(peer);
     }
 
-    cmd.env("RUST_LOG", "info,starlang::distribution=debug")
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap_or_else(|e| panic!("Failed to start server from {:?}: {}", binary, e))
+    cmd.env(
+        "RUST_LOG",
+        "info,starlang::distribution=debug,chat_server::session=debug,chat_server::channel=debug",
+    )
+    .kill_on_drop(true)
+    .spawn()
+    .unwrap_or_else(|e| panic!("Failed to start server from {:?}: {}", binary, e))
 }
 
 /// Helper to connect a client and return the stream.
@@ -153,7 +167,7 @@ struct RoomInfo {
 #[tokio::test]
 async fn test_single_node_chat() {
     // Start a single server
-    let mut server = start_server("node1", 19999, 19000, None).await;
+    let mut server = start_server("node1", 19999, 19000, 14000, 18080, None).await;
 
     // Give server time to start
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -253,11 +267,12 @@ async fn test_single_node_chat() {
 #[tokio::test]
 async fn test_cross_node_global_registry() {
     // Start node1
-    let mut node1 = start_server("node1", 29999, 29000, None).await;
+    let mut node1 = start_server("node1", 29999, 29000, 24000, 28080, None).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start node2 and connect to node1
-    let mut node2 = start_server("node2", 29998, 29001, Some("127.0.0.1:29000")).await;
+    let mut node2 =
+        start_server("node2", 29998, 29001, 24001, 28081, Some("127.0.0.1:29000")).await;
     tokio::time::sleep(Duration::from_secs(2)).await; // Extra time for distribution handshake
 
     // Connect alice to node1
@@ -284,8 +299,14 @@ async fn test_cross_node_global_registry() {
         resp
     );
 
-    // Give time for global registry to sync
+    // Give time for global registry to sync and drain any pending messages (like UserList from PushPresenceState)
     tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Drain any pending messages from Alice (like UserList sent after her own join)
+    while let Ok(msg) = timeout(Duration::from_millis(100), read_message(&mut alice)).await {
+        let event = decode_event(&msg);
+        tracing::debug!("Drained pending message from Alice: {:?}", event);
+    }
 
     // Connect bob to node2
     let mut bob = connect_client(29998).await;
@@ -356,11 +377,12 @@ async fn test_cross_node_global_registry() {
 #[tokio::test]
 async fn test_room_list_across_nodes() {
     // Start node1
-    let mut node1 = start_server("node1", 39999, 39000, None).await;
+    let mut node1 = start_server("node1", 39999, 39000, 34000, 38080, None).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start node2 connected to node1
-    let mut node2 = start_server("node2", 39998, 39001, Some("127.0.0.1:39000")).await;
+    let mut node2 =
+        start_server("node2", 39998, 39001, 34001, 38081, Some("127.0.0.1:39000")).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Connect alice to node1 and create a room

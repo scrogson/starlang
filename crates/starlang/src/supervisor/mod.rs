@@ -50,8 +50,8 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+mod core;
 mod error;
-mod supervisor;
 mod types;
 
 /// DynamicSupervisor for starting children on demand.
@@ -63,11 +63,11 @@ mod types;
 /// See [`dynamic_supervisor`] module for details.
 pub mod dynamic_supervisor;
 
-pub use error::{DeleteError, RestartError, StartError, TerminateError};
-pub use supervisor::{
+pub use core::{
     Supervisor, SupervisorInit, count_children, delete_child, start, start_link, terminate_child,
     which_children,
 };
+pub use error::{DeleteError, RestartError, StartError, TerminateError};
 pub use types::{
     ChildCounts, ChildInfo, ChildSpec, ChildType, RestartType, ShutdownType, StartChildError,
     Strategy, SupervisorFlags,

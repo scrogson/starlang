@@ -106,6 +106,11 @@ impl Session {
 
     /// Handle incoming channel messages (broadcasts from other users).
     async fn handle_channel_message(&mut self, data: &[u8]) {
+        tracing::debug!(
+            nick = ?self.nick,
+            data_len = data.len(),
+            "handle_channel_message called"
+        );
         // First, check if this is a presence message and apply it to the tracker
         if let Ok(presence_msg) = postcard::from_bytes::<starlang::presence::PresenceMessage>(data)
         {
@@ -139,77 +144,83 @@ impl Session {
         }
 
         // Now handle the message for client notification
-        if let Ok(reply) = postcard::from_bytes::<ChannelReply>(data) {
-            match reply {
-                ChannelReply::Push {
-                    topic,
-                    event: _,
-                    payload,
-                } => {
-                    // Decode the room event
-                    if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
-                        let room_name = topic.strip_prefix("room:").unwrap_or(&topic);
-                        match room_event {
-                            RoomOutEvent::UserJoined { nick } => {
-                                self.send_event(ServerEvent::UserJoined {
-                                    room: room_name.to_string(),
-                                    nick,
-                                })
-                                .await;
-                            }
-                            RoomOutEvent::UserLeft { nick } => {
-                                self.send_event(ServerEvent::UserLeft {
-                                    room: room_name.to_string(),
-                                    nick,
-                                })
-                                .await;
-                            }
-                            RoomOutEvent::Message { from, text } => {
-                                self.send_event(ServerEvent::Message {
-                                    room: room_name.to_string(),
-                                    from,
-                                    text,
-                                })
-                                .await;
-                            }
-                            RoomOutEvent::PresenceState { users } => {
-                                self.send_event(ServerEvent::UserList {
-                                    room: room_name.to_string(),
-                                    users,
-                                })
-                                .await;
-                            }
-                            RoomOutEvent::PresenceSyncRequest { .. } => {
-                                // Handled by RoomChannel::handle_info above
-                            }
-                            RoomOutEvent::PresenceSyncResponse { nick } => {
-                                // An existing member announced themselves
-                                // Send this as a UserJoined so client adds them to list
-                                tracing::debug!(
-                                    room = %room_name,
-                                    nick = %nick,
-                                    "Received presence sync response, sending UserJoined to client"
-                                );
-                                self.send_event(ServerEvent::UserJoined {
-                                    room: room_name.to_string(),
-                                    nick,
-                                })
-                                .await;
-                            }
-                            RoomOutEvent::History { messages } => {
-                                // History is already sent directly by session.rs on join
-                                // This is just for consistency - forward if received via channel
-                                self.send_event(ServerEvent::History {
-                                    room: room_name.to_string(),
-                                    messages,
-                                })
-                                .await;
-                            }
-                        }
+        if let Ok(ChannelReply::Push {
+            topic,
+            event: _,
+            payload,
+        }) = postcard::from_bytes::<ChannelReply>(data)
+        {
+            // Decode the room event
+            if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
+                let room_name = topic.strip_prefix("room:").unwrap_or(&topic);
+                match room_event {
+                    RoomOutEvent::UserJoined { nick } => {
+                        tracing::debug!(
+                            room = %room_name,
+                            joined_nick = %nick,
+                            my_nick = ?self.nick,
+                            "Received UserJoined, sending to client"
+                        );
+                        self.send_event(ServerEvent::UserJoined {
+                            room: room_name.to_string(),
+                            nick,
+                        })
+                        .await;
                     }
-                }
-                _ => {
-                    // Other replies are handled inline
+                    RoomOutEvent::UserLeft { nick } => {
+                        self.send_event(ServerEvent::UserLeft {
+                            room: room_name.to_string(),
+                            nick,
+                        })
+                        .await;
+                    }
+                    RoomOutEvent::Message { from, text } => {
+                        self.send_event(ServerEvent::Message {
+                            room: room_name.to_string(),
+                            from,
+                            text,
+                        })
+                        .await;
+                    }
+                    RoomOutEvent::PresenceState { users } => {
+                        tracing::debug!(
+                            room = %room_name,
+                            users = ?users,
+                            nick = ?self.nick,
+                            "Received PresenceState, sending UserList to client"
+                        );
+                        self.send_event(ServerEvent::UserList {
+                            room: room_name.to_string(),
+                            users,
+                        })
+                        .await;
+                    }
+                    RoomOutEvent::PresenceSyncRequest { .. } => {
+                        // Handled by RoomChannel::handle_info above
+                    }
+                    RoomOutEvent::PresenceSyncResponse { nick } => {
+                        // An existing member announced themselves
+                        // Send this as a UserJoined so client adds them to list
+                        tracing::debug!(
+                            room = %room_name,
+                            nick = %nick,
+                            "Received presence sync response, sending UserJoined to client"
+                        );
+                        self.send_event(ServerEvent::UserJoined {
+                            room: room_name.to_string(),
+                            nick,
+                        })
+                        .await;
+                    }
+                    RoomOutEvent::History { messages } => {
+                        // History is already sent directly by session.rs on join
+                        // This is just for consistency - forward if received via channel
+                        self.send_event(ServerEvent::History {
+                            room: room_name.to_string(),
+                            messages,
+                        })
+                        .await;
+                    }
                 }
             }
         }

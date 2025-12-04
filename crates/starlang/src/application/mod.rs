@@ -44,11 +44,11 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-mod application;
+mod core;
 mod error;
 mod types;
 
-pub use application::{AppController, Application};
+pub use core::{AppController, Application};
 pub use error::{StartError, StopError};
 pub use types::{AppConfig, AppInfo, AppSpec, ConfigValue, StartResult};
 
