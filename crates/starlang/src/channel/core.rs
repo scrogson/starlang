@@ -1,8 +1,9 @@
 //! Core channel types and traits.
 
+use crate::dist::pg;
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
-use starlang_core::Pid;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use starlang_core::{Pid, RawTerm};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -56,6 +57,146 @@ impl Socket<()> {
     /// Create a socket with default (unit) assigns.
     pub fn with_pid(pid: Pid, topic: impl Into<String>) -> Self {
         Self::new(pid, topic)
+    }
+}
+
+// ============================================================================
+// Phoenix-style Channel Helper Functions
+// ============================================================================
+
+/// Push a message directly to a socket's client.
+///
+/// This mirrors Phoenix's `push/3` - sends an event directly to one client
+/// without requiring a prior message from the client.
+///
+/// # Example
+///
+/// ```ignore
+/// use starlang::channel::push;
+///
+/// // In handle_info or handle_in:
+/// push(&socket, "new_notification", &NotificationEvent { message: "Hello!" });
+/// ```
+pub fn push<A, T: Serialize>(socket: &Socket<A>, event: &str, payload: &T) {
+    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
+        let msg = ChannelReply::Push {
+            topic: socket.topic.clone(),
+            event: event.to_string(),
+            payload: payload_bytes,
+        };
+        if let Ok(bytes) = postcard::to_allocvec(&msg) {
+            let _ = crate::send_raw(socket.pid, bytes);
+        }
+    }
+}
+
+/// Broadcast a message to all subscribers of a topic.
+///
+/// This mirrors Phoenix's `broadcast/3` - sends to all subscribers of the
+/// socket's topic, including the sender.
+///
+/// # Example
+///
+/// ```ignore
+/// use starlang::channel::broadcast;
+///
+/// // Broadcast to everyone in the room including sender:
+/// broadcast(&socket, "new_msg", &MessageEvent { from: "alice", text: "hello" });
+/// ```
+pub fn broadcast<A, T: Serialize>(socket: &Socket<A>, event: &str, payload: &T) {
+    broadcast_to_topic(&socket.topic, event, payload);
+}
+
+/// Broadcast a message to all subscribers of a topic, excluding the sender.
+///
+/// This mirrors Phoenix's `broadcast_from/3` - sends to all subscribers except
+/// the socket that initiated the broadcast.
+///
+/// # Example
+///
+/// ```ignore
+/// use starlang::channel::broadcast_from;
+///
+/// // Broadcast to everyone except the sender:
+/// broadcast_from(&socket, "user_joined", &JoinEvent { nick: "alice" });
+/// ```
+pub fn broadcast_from<A, T: Serialize>(socket: &Socket<A>, event: &str, payload: &T) {
+    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
+        let msg = ChannelReply::Push {
+            topic: socket.topic.clone(),
+            event: event.to_string(),
+            payload: payload_bytes,
+        };
+        if let Ok(bytes) = postcard::to_allocvec(&msg) {
+            let group = format!("channel:{}", socket.topic);
+            let members = pg::get_members(&group);
+            for pid in members {
+                if pid != socket.pid {
+                    let _ = crate::send_raw(pid, bytes.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Broadcast a message to all subscribers of a specific topic.
+///
+/// Unlike `broadcast/3`, this takes a topic string directly instead of a socket,
+/// useful when you need to broadcast without having a socket reference.
+///
+/// # Example
+///
+/// ```ignore
+/// use starlang::channel::broadcast_to_topic;
+///
+/// broadcast_to_topic("room:lobby", "system_msg", &SystemEvent { message: "Server restarting" });
+/// ```
+pub fn broadcast_to_topic<T: Serialize>(topic: &str, event: &str, payload: &T) {
+    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
+        let msg = ChannelReply::Push {
+            topic: topic.to_string(),
+            event: event.to_string(),
+            payload: payload_bytes,
+        };
+        if let Ok(bytes) = postcard::to_allocvec(&msg) {
+            let group = format!("channel:{}", topic);
+            let members = pg::get_members(&group);
+            for pid in members {
+                let _ = crate::send_raw(pid, bytes.clone());
+            }
+        }
+    }
+}
+
+/// Broadcast a message to all subscribers of a topic except a specific PID.
+///
+/// This is useful when you want to exclude a specific process from the broadcast
+/// without having a full socket reference.
+///
+/// # Example
+///
+/// ```ignore
+/// use starlang::channel::broadcast_to_topic_from;
+///
+/// // Broadcast to all except the sender PID:
+/// broadcast_to_topic_from("room:lobby", sender_pid, "user_left", &LeaveEvent { nick: "bob" });
+/// ```
+pub fn broadcast_to_topic_from<T: Serialize>(topic: &str, from_pid: Pid, event: &str, payload: &T) {
+    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
+        let msg = ChannelReply::Push {
+            topic: topic.to_string(),
+            event: event.to_string(),
+            payload: payload_bytes,
+        };
+        if let Ok(bytes) = postcard::to_allocvec(&msg) {
+            let group = format!("channel:{}", topic);
+            let members = pg::get_members(&group);
+            for pid in members {
+                if pid != from_pid {
+                    let _ = crate::send_raw(pid, bytes.clone());
+                }
+            }
+        }
     }
 }
 
@@ -256,9 +397,26 @@ pub trait Channel: Send + Sync + 'static {
 
     /// Called when the channel receives a raw message (e.g., from other processes).
     ///
-    /// Override this to handle inter-process communication.
+    /// Override this to handle inter-process communication. Use `msg.decode::<T>()`
+    /// to attempt decoding the message into a specific type.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// async fn handle_info(
+    ///     msg: RawTerm,
+    ///     socket: &mut Socket<Self::Assigns>,
+    /// ) -> HandleResult<Self::OutEvent> {
+    ///     if let Some(tick) = msg.decode::<Tick>() {
+    ///         // handle tick message
+    ///     } else if let Some(refresh) = msg.decode::<Refresh>() {
+    ///         // handle refresh message
+    ///     }
+    ///     HandleResult::NoReply
+    /// }
+    /// ```
     async fn handle_info(
-        _msg: Vec<u8>,
+        _msg: RawTerm,
         _socket: &mut Socket<Self::Assigns>,
     ) -> HandleResult<Self::OutEvent> {
         HandleResult::NoReply
@@ -367,15 +525,23 @@ pub trait ChannelHandler: Send + Sync {
     /// Handle termination.
     async fn handle_terminate(&self, reason: TerminateReason, socket: &Socket<Vec<u8>>);
 
-    /// Handle an info message (raw bytes from mailbox).
-    async fn handle_info(&self, msg: Vec<u8>, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>>;
+    /// Handle an info message (raw term from mailbox).
+    async fn handle_info(&self, msg: RawTerm, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>>;
 
-    /// Convert a postcard-encoded broadcast payload to JSON bytes.
+    /// Decode a postcard-encoded payload and re-encode for the given format.
     ///
-    /// This is used by WebSocket transports to convert broadcast payloads
-    /// from the internal postcard format to JSON for transmission to clients.
-    /// Returns None if the payload cannot be converted.
-    fn broadcast_to_json(&self, payload: &[u8]) -> Option<Vec<u8>>;
+    /// This is used by transports to convert broadcast payloads from the
+    /// internal postcard format to their wire format.
+    fn transcode_payload(&self, payload: &[u8], format: PayloadFormat) -> Option<Vec<u8>>;
+}
+
+/// Payload serialization format for transport encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadFormat {
+    /// JSON encoding (for WebSocket/HTTP transports).
+    Json,
+    /// Postcard encoding (for binary transports).
+    Postcard,
 }
 
 /// Wrapper to make a typed Channel into a type-erased ChannelHandler.
@@ -541,13 +707,18 @@ where
         }
     }
 
-    fn broadcast_to_json(&self, payload: &[u8]) -> Option<Vec<u8>> {
-        // Decode from postcard, re-encode as JSON
+    fn transcode_payload(&self, payload: &[u8], format: PayloadFormat) -> Option<Vec<u8>> {
         let out_event: C::OutEvent = postcard::from_bytes(payload).ok()?;
-        serde_json::to_vec(&out_event).ok()
+        match format {
+            PayloadFormat::Postcard => postcard::to_allocvec(&out_event).ok(),
+            #[cfg(feature = "websocket")]
+            PayloadFormat::Json => serde_json::to_vec(&out_event).ok(),
+            #[cfg(not(feature = "websocket"))]
+            PayloadFormat::Json => None,
+        }
     }
 
-    async fn handle_info(&self, msg: Vec<u8>, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
+    async fn handle_info(&self, msg: RawTerm, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
         let assigns: C::Assigns = match postcard::from_bytes(&socket.assigns) {
             Ok(a) => a,
             Err(_) => return HandleResult::NoReply,
@@ -603,9 +774,6 @@ where
 // ============================================================================
 // Channel Server - Runtime for managing channel connections
 // ============================================================================
-
-use crate::dist::pg;
-use serde::Deserialize;
 
 /// Messages sent to a ChannelServer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -933,19 +1101,19 @@ impl ChannelServer {
         self.channels.contains_key(topic)
     }
 
-    /// Convert a postcard-encoded broadcast payload to JSON for WebSocket clients.
+    /// Transcode a postcard-encoded payload to another format.
     ///
     /// This finds the appropriate handler for the topic and uses it to convert
-    /// the payload from postcard to JSON format.
-    pub fn broadcast_to_json(&self, topic: &str, payload: &[u8]) -> Option<Vec<u8>> {
+    /// the payload from postcard to the requested format.
+    pub fn transcode_payload(&self, topic: &str, payload: &[u8], format: PayloadFormat) -> Option<Vec<u8>> {
         let handler = self.find_handler(topic)?;
-        handler.broadcast_to_json(payload)
+        handler.transcode_payload(payload, format)
     }
 
     /// Handle an info message for a specific topic.
     ///
     /// This dispatches the raw message to the channel's handle_info callback.
-    pub async fn handle_info(&mut self, topic: &str, msg: Vec<u8>) -> Option<HandleResult<Vec<u8>>> {
+    pub async fn handle_info(&mut self, topic: &str, msg: RawTerm) -> Option<HandleResult<Vec<u8>>> {
         let handler = self.find_handler(topic)?.clone();
         let socket = self.channels.get_mut(topic)?;
         Some(handler.handle_info(msg, socket).await)
@@ -954,7 +1122,7 @@ impl ChannelServer {
     /// Handle an info message, trying all joined channels.
     ///
     /// This is used when we receive a message but don't know which channel it's for.
-    pub async fn handle_info_any(&mut self, msg: Vec<u8>) -> Vec<(String, HandleResult<Vec<u8>>)> {
+    pub async fn handle_info_any(&mut self, msg: RawTerm) -> Vec<(String, HandleResult<Vec<u8>>)> {
         let mut results = Vec::new();
         let topics: Vec<String> = self.channels.keys().cloned().collect();
 

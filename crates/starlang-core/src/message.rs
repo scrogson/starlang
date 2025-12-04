@@ -115,6 +115,110 @@ pub trait Message: Term {}
 #[allow(deprecated)]
 impl<T: Term> Message for T {}
 
+/// A raw term that hasn't been decoded yet.
+///
+/// This is used in `handle_info` callbacks where the message type isn't known
+/// until runtime. It provides a clean API for attempting to decode into
+/// various types without exposing the underlying serialization format.
+///
+/// # Examples
+///
+/// ```
+/// use starlang_core::RawTerm;
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// struct Ping { id: u32 }
+///
+/// #[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// struct Pong { id: u32 }
+///
+/// // Simulate receiving a message
+/// let ping = Ping { id: 42 };
+/// let bytes = postcard::to_allocvec(&ping).unwrap();
+/// let raw = RawTerm::new(bytes);
+///
+/// // Try to decode as different types
+/// if let Some(ping) = raw.decode::<Ping>() {
+///     assert_eq!(ping.id, 42);
+/// } else if let Some(_pong) = raw.decode::<Pong>() {
+///     panic!("shouldn't be a Pong");
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct RawTerm {
+    bytes: Vec<u8>,
+}
+
+impl RawTerm {
+    /// Create a new raw term from bytes.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Attempt to decode this raw term into a typed value.
+    ///
+    /// Returns `Some(T)` if decoding succeeds, `None` otherwise.
+    /// This is useful for pattern-matching style dispatch in `handle_info`:
+    ///
+    /// ```ignore
+    /// async fn handle_info(msg: RawTerm, state: &mut State) -> InfoResult<State> {
+    ///     if let Some(tick) = msg.decode::<Tick>() {
+    ///         // handle tick
+    ///     } else if let Some(refresh) = msg.decode::<Refresh>() {
+    ///         // handle refresh
+    ///     }
+    ///     // ...
+    /// }
+    /// ```
+    pub fn decode<T: DeserializeOwned>(&self) -> Option<T> {
+        postcard::from_bytes(&self.bytes).ok()
+    }
+
+    /// Attempt to decode this raw term, returning an error on failure.
+    pub fn try_decode<T: DeserializeOwned>(&self) -> Result<T, DecodeError> {
+        postcard::from_bytes(&self.bytes).map_err(DecodeError::from)
+    }
+
+    /// Get the raw bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consume and return the raw bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Check if this raw term is empty.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Get the length of the raw bytes.
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+impl From<Vec<u8>> for RawTerm {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::new(bytes)
+    }
+}
+
+impl From<RawTerm> for Vec<u8> {
+    fn from(raw: RawTerm) -> Self {
+        raw.bytes
+    }
+}
+
+impl AsRef<[u8]> for RawTerm {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

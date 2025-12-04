@@ -115,7 +115,7 @@ impl Session {
         }
 
         // Dispatch to handle_info so RoomChannel can respond to presence sync, etc.
-        let info_results = self.channels.handle_info_any(data.to_vec()).await;
+        let info_results = self.channels.handle_info_any(data.to_vec().into()).await;
         for (topic, result) in info_results {
             // Handle any broadcasts from handle_info
             if let starlang::channel::HandleResult::Broadcast { event, payload } = result {

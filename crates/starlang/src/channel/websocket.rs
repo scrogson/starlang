@@ -367,13 +367,15 @@ where
         }
     }
 
-    fn broadcast_to_json(&self, payload: &[u8]) -> Option<Vec<u8>> {
-        // Decode from postcard, re-encode as JSON
+    fn transcode_payload(&self, payload: &[u8], format: super::PayloadFormat) -> Option<Vec<u8>> {
         let out_event: C::OutEvent = postcard::from_bytes(payload).ok()?;
-        serde_json::to_vec(&out_event).ok()
+        match format {
+            super::PayloadFormat::Json => serde_json::to_vec(&out_event).ok(),
+            super::PayloadFormat::Postcard => postcard::to_allocvec(&out_event).ok(),
+        }
     }
 
-    async fn handle_info(&self, msg: Vec<u8>, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
+    async fn handle_info(&self, msg: starlang_core::RawTerm, socket: &mut Socket<Vec<u8>>) -> HandleResult<Vec<u8>> {
         let assigns: C::Assigns = match serde_json::from_slice(&socket.assigns) {
             Ok(a) => a,
             Err(_) => return HandleResult::NoReply,
@@ -552,7 +554,7 @@ async fn handle_connection(
                         if let ChannelReply::Push { topic, event, payload } = channel_reply {
                             // Also dispatch to handle_info so channel can respond to presence sync, etc.
                             // Clone the bytes before moving them
-                            let info_results = session.channels.handle_info_any(msg_bytes.clone()).await;
+                            let info_results = session.channels.handle_info_any(msg_bytes.clone().into()).await;
                             for (info_topic, result) in info_results {
                                 if let HandleResult::Broadcast { event: bc_event, payload: bc_payload } = result {
                                     let group = format!("channel:{}", info_topic);
@@ -573,7 +575,7 @@ async fn handle_connection(
                             // Convert the payload from postcard to JSON using the handler
                             // Broadcasts use postcard internally for consistency with TUI clients
                             let json_payload: Value = session.channels
-                                .broadcast_to_json(&topic, &payload)
+                                .transcode_payload(&topic, &payload, crate::channel::PayloadFormat::Json)
                                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                                 .unwrap_or(json!({}));
 
@@ -598,7 +600,7 @@ async fn handle_connection(
                         }
 
                         // Not a ChannelReply - dispatch to handle_info for all joined channels
-                        let results = session.channels.handle_info_any(msg_bytes).await;
+                        let results = session.channels.handle_info_any(msg_bytes.into()).await;
                         for (topic, result) in results {
                             // Handle any broadcasts from handle_info
                             if let HandleResult::Broadcast { event, payload } = result {

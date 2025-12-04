@@ -8,7 +8,10 @@ use crate::room::{Room, RoomCall, RoomReply};
 use crate::room_supervisor;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use starlang::channel::{Channel, ChannelReply, HandleResult, JoinError, JoinResult, Socket};
+use starlang::channel::{
+    broadcast_from, push, Channel, ChannelReply, HandleResult, JoinError, JoinResult, Socket,
+};
+use starlang::RawTerm;
 use starlang::presence;
 use std::time::Duration;
 
@@ -74,66 +77,6 @@ enum ChannelInfo {
     PushPresenceState,
     /// A presence sync request from another user.
     PresenceSyncRequest { from_pid: String },
-}
-
-/// Push a message to a specific socket (client).
-///
-/// This mirrors Phoenix's `push/3` - sends a message directly to one client.
-#[allow(dead_code)]
-fn push<T: serde::Serialize>(socket: &Socket<RoomAssigns>, event: &str, payload: &T) {
-    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
-        let msg = ChannelReply::Push {
-            topic: socket.topic.clone(),
-            event: event.to_string(),
-            payload: payload_bytes,
-        };
-        if let Ok(bytes) = postcard::to_allocvec(&msg) {
-            let _ = starlang::send_raw(socket.pid, bytes);
-        }
-    }
-}
-
-/// Broadcast a message to all members of a topic.
-///
-/// This mirrors Phoenix's `broadcast/3` - sends to all subscribers including sender.
-#[allow(dead_code)]
-fn broadcast<T: serde::Serialize>(topic: &str, event: &str, payload: &T) {
-    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
-        let msg = ChannelReply::Push {
-            topic: topic.to_string(),
-            event: event.to_string(),
-            payload: payload_bytes,
-        };
-        if let Ok(bytes) = postcard::to_allocvec(&msg) {
-            let group = format!("channel:{}", topic);
-            let members = starlang::dist::pg::get_members(&group);
-            for pid in members {
-                let _ = starlang::send_raw(pid, bytes.clone());
-            }
-        }
-    }
-}
-
-/// Broadcast a message to all members of a topic except the sender.
-///
-/// This mirrors Phoenix's `broadcast_from/3` - sends to all except the sender.
-fn broadcast_from<T: serde::Serialize>(socket: &Socket<RoomAssigns>, event: &str, payload: &T) {
-    if let Ok(payload_bytes) = postcard::to_allocvec(payload) {
-        let msg = ChannelReply::Push {
-            topic: socket.topic.clone(),
-            event: event.to_string(),
-            payload: payload_bytes,
-        };
-        if let Ok(bytes) = postcard::to_allocvec(&msg) {
-            let group = format!("channel:{}", socket.topic);
-            let members = starlang::dist::pg::get_members(&group);
-            for pid in members {
-                if pid != socket.pid {
-                    let _ = starlang::send_raw(pid, bytes.clone());
-                }
-            }
-        }
-    }
 }
 
 /// The room channel handler.
@@ -240,11 +183,11 @@ impl Channel for RoomChannel {
     }
 
     async fn handle_info(
-        msg: Vec<u8>,
+        msg: RawTerm,
         socket: &mut Socket<Self::Assigns>,
     ) -> HandleResult<Self::OutEvent> {
         // First try to decode as ChannelInfo (internal messages)
-        if let Ok(info) = postcard::from_bytes::<ChannelInfo>(&msg) {
+        if let Some(info) = msg.decode::<ChannelInfo>() {
             match info {
                 ChannelInfo::AfterJoin => {
                     tracing::debug!(
@@ -345,9 +288,9 @@ impl Channel for RoomChannel {
         }
 
         // Try to decode as ChannelReply (broadcast from another user via pg)
-        if let Ok(reply) = postcard::from_bytes::<ChannelReply>(&msg) {
+        if let Some(reply) = msg.decode::<ChannelReply>() {
             if let ChannelReply::Push { event, payload, .. } = reply {
-                // Decode the room event
+                // Decode the room event from the payload bytes
                 if let Ok(room_event) = postcard::from_bytes::<RoomOutEvent>(&payload) {
                     match room_event {
                         RoomOutEvent::PresenceSyncRequest { from_pid } => {
@@ -366,7 +309,7 @@ impl Channel for RoomChannel {
         }
 
         // Try to decode as PresenceMessage (delta from another node)
-        if let Ok(presence_msg) = postcard::from_bytes::<starlang::presence::PresenceMessage>(&msg) {
+        if let Some(presence_msg) = msg.decode::<starlang::presence::PresenceMessage>() {
             // Apply the presence delta to the global tracker
             let from_node = starlang_core::node::node_name_atom(); // TODO: get actual source node
             starlang::presence::tracker().handle_message(presence_msg, from_node);

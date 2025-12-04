@@ -27,7 +27,7 @@ pub use starlang_atom::{Atom, atom};
 
 pub use exit_reason::ExitReason;
 #[allow(deprecated)]
-pub use message::{DecodeError, Message, Term};
+pub use message::{DecodeError, Message, RawTerm, Term};
 pub use node::{NodeId, NodeInfo, NodeName};
 pub use pid::{Pid, current_creation, increment_creation};
 pub use reference::Ref;

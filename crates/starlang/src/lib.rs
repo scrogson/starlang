@@ -154,7 +154,7 @@ pub use starlang_runtime::{
 };
 
 // Re-export core types
-pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, Ref, Term};
+pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
 
 // Re-export runtime and process types
 pub use starlang_process::{Runtime, RuntimeHandle};
@@ -180,7 +180,7 @@ pub use starlang_macros::{main, self_pid, starlang_process, GenServerImpl};
 /// ```
 pub mod prelude {
     // Core types
-    pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, Ref, Term};
+    pub use starlang_core::{ExitReason, NodeId, NodeInfo, NodeName, Pid, RawTerm, Ref, Term};
 
     // Runtime and process
     pub use starlang_process::{Runtime, RuntimeHandle};

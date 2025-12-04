@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use starlang::channel::{Channel, HandleResult, JoinResult, Socket};
+use starlang::RawTerm;
 
 use crate::protocol::RoomInfo;
 use crate::registry::Registry;
@@ -88,7 +89,7 @@ impl Channel for LobbyChannel {
     }
 
     async fn handle_info(
-        _msg: Vec<u8>,
+        _msg: RawTerm,
         _socket: &mut Socket<Self::Assigns>,
     ) -> HandleResult<Self::OutEvent> {
         HandleResult::NoReply
