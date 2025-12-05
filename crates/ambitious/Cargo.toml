@@ -45,3 +45,4 @@ peer = ["tokio/process"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-test = "0.4"
+proptest = "1"

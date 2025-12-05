@@ -44,6 +44,9 @@ mod process_monitor;
 pub(crate) mod protocol;
 mod transport;
 
+#[cfg(test)]
+mod tests;
+
 pub use discovery::NodeDiscovery;
 pub use manager::{connect, disconnect, node_info, nodes};
 pub use monitor::{NodeDown, NodeDownReason, NodeMonitorRef, demonitor_node, monitor_node};
