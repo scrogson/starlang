@@ -9,7 +9,7 @@ use super::process_monitor::ProcessMonitorRegistry;
 use super::protocol::{DistError, DistMessage};
 use super::transport::{QuicConnection, QuicTransport};
 use crate::core::{Atom, NodeInfo, NodeName, Pid, Ref};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -41,6 +41,10 @@ pub struct DistributionManager {
     nodes: DashMap<Atom, ConnectedNode>,
     /// Node name lookup by address.
     addr_to_node: DashMap<SocketAddr, Atom>,
+    /// Known node addresses (persists across disconnects for reconnection).
+    known_nodes: DashMap<Atom, SocketAddr>,
+    /// Nodes currently being reconnected to (prevents concurrent reconnect attempts).
+    reconnecting: DashSet<Atom>,
     /// The QUIC transport (if listening).
     transport: RwLock<Option<Arc<QuicTransport>>>,
     /// Node monitor registry.
@@ -59,6 +63,8 @@ impl DistributionManager {
             creation,
             nodes: DashMap::new(),
             addr_to_node: DashMap::new(),
+            known_nodes: DashMap::new(),
+            reconnecting: DashSet::new(),
             transport: RwLock::new(None),
             monitors: NodeMonitorRegistry::new(),
             process_monitors: ProcessMonitorRegistry::new(),
@@ -145,6 +151,9 @@ impl DistributionManager {
         );
         self.addr_to_node.insert(addr, remote_node_atom);
 
+        // Remember this node's address for potential reconnection
+        self.known_nodes.insert(remote_node_atom, addr);
+
         // Spawn message sender task
         let node_atom = remote_node_atom;
         tokio::spawn(async move {
@@ -230,6 +239,10 @@ impl DistributionManager {
     /// Send a message to a remote process.
     ///
     /// The PID's node field is an Atom identifying the target node.
+    ///
+    /// If the node is disconnected but we know its address, a reconnection
+    /// attempt is triggered in the background. The current send will fail,
+    /// but subsequent sends (after reconnection) will succeed.
     pub fn send_to_remote(&self, pid: Pid, payload: Vec<u8>) -> Result<(), DistError> {
         let node_atom = pid.node();
 
@@ -246,8 +259,57 @@ impl DistributionManager {
             }
             Ok(())
         } else {
+            // Not connected - try to trigger reconnection if we know the address
+            self.try_reconnect(node_atom);
             Err(DistError::NotConnected(node_atom))
         }
+    }
+
+    /// Trigger a background reconnection attempt to a known node.
+    ///
+    /// This is called when we try to send to a disconnected node.
+    /// If we know the node's address and aren't already reconnecting,
+    /// spawn a task to attempt reconnection.
+    fn try_reconnect(&self, node_atom: Atom) {
+        // Check if we know this node's address
+        let addr = match self.known_nodes.get(&node_atom) {
+            Some(addr) => *addr,
+            None => return, // Unknown node, can't reconnect
+        };
+
+        // Check if we're already reconnecting
+        if !self.reconnecting.insert(node_atom) {
+            // Already reconnecting
+            return;
+        }
+
+        tracing::debug!(node = %node_atom, %addr, "Attempting reconnection");
+
+        // Spawn reconnection task
+        tokio::spawn(async move {
+            // Small delay before reconnecting (avoid tight retry loops)
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            let result = if let Some(manager) = DIST_MANAGER.get() {
+                manager.connect_to(addr).await
+            } else {
+                Err(DistError::NotInitialized)
+            };
+
+            // Remove from reconnecting set
+            if let Some(manager) = DIST_MANAGER.get() {
+                manager.reconnecting.remove(&node_atom);
+            }
+
+            match result {
+                Ok(_) => {
+                    tracing::info!(node = %node_atom, "Reconnected successfully");
+                }
+                Err(e) => {
+                    tracing::warn!(node = %node_atom, error = %e, "Reconnection failed");
+                }
+            }
+        });
     }
 
     /// Get list of connected nodes.
@@ -358,6 +420,9 @@ async fn handle_incoming_connection(
         },
     );
     manager.addr_to_node.insert(addr, remote_node_atom);
+
+    // Remember this node's address for potential reconnection
+    manager.known_nodes.insert(remote_node_atom, addr);
 
     // Spawn message handling tasks
     let node_atom = remote_node_atom;
