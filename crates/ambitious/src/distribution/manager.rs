@@ -156,14 +156,16 @@ impl DistributionManager {
 
         // Spawn message sender task
         let node_atom = remote_node_atom;
+        let conn_addr = addr;
         tokio::spawn(async move {
-            message_sender_loop(rx, node_atom).await;
+            message_sender_loop(rx, node_atom, conn_addr).await;
         });
 
         // Spawn message receiver task
         let node_atom = remote_node_atom;
+        let conn_addr = addr;
         tokio::spawn(async move {
-            message_receiver_loop(node_atom).await;
+            message_receiver_loop(node_atom, conn_addr).await;
         });
 
         // Request global registry sync from the new node
@@ -426,14 +428,16 @@ async fn handle_incoming_connection(
 
     // Spawn message handling tasks
     let node_atom = remote_node_atom;
+    let conn_addr = addr;
     tokio::spawn(async move {
-        message_sender_loop(rx, node_atom).await;
+        message_sender_loop(rx, node_atom, conn_addr).await;
     });
 
     // Spawn receiver loop
     let node_atom = remote_node_atom;
+    let conn_addr = addr;
     tokio::spawn(async move {
-        message_receiver_loop(node_atom).await;
+        message_receiver_loop(node_atom, conn_addr).await;
     });
 
     // Send our global registry to the new node
@@ -451,7 +455,14 @@ async fn handle_incoming_connection(
 }
 
 /// Loop to send messages to a remote node.
-async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Atom) {
+///
+/// The `connection_addr` parameter identifies which specific connection this loop
+/// is handling. This prevents cleanup races when a connection is replaced.
+async fn message_sender_loop(
+    mut rx: mpsc::Receiver<DistMessage>,
+    node_atom: Atom,
+    connection_addr: SocketAddr,
+) {
     while let Some(msg) = rx.recv().await {
         let manager = match DIST_MANAGER.get() {
             Some(m) => m,
@@ -459,6 +470,16 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Ato
         };
 
         if let Some(node) = manager.nodes.get(&node_atom) {
+            // Check if this is still our connection
+            if node.info.addr != Some(connection_addr) {
+                // Connection was replaced, exit without cleanup
+                tracing::debug!(
+                    node = %node_atom,
+                    our_addr = %connection_addr,
+                    "Connection replaced, sender loop exiting"
+                );
+                return;
+            }
             if let Err(e) = node.connection.send_message(&msg).await {
                 tracing::error!(error = %e, node = %node_atom, "Failed to send message");
                 break;
@@ -468,28 +489,55 @@ async fn message_sender_loop(mut rx: mpsc::Receiver<DistMessage>, node_atom: Ato
         }
     }
 
-    // Connection closed or error - clean up
-    if let Some(manager) = DIST_MANAGER.get()
-        && let Some((_, node)) = manager.nodes.remove(&node_atom)
-    {
-        if let Some(addr) = node.info.addr {
-            manager.addr_to_node.remove(&addr);
+    // Connection closed or error - clean up only if this is still our connection
+    if let Some(manager) = DIST_MANAGER.get() {
+        let should_cleanup = manager
+            .nodes
+            .get(&node_atom)
+            .is_some_and(|node| node.info.addr == Some(connection_addr));
+
+        if should_cleanup {
+            if let Some((_, node)) = manager.nodes.remove(&node_atom) {
+                if let Some(addr) = node.info.addr {
+                    manager.addr_to_node.remove(&addr);
+                }
+                manager
+                    .monitors
+                    .notify_node_down(node_atom, "connection closed".to_string());
+                // Clean up process monitors and links for this node
+                manager.process_monitors.handle_node_down(node_atom);
+                // Clean up pg memberships from this node
+                super::pg::pg().remove_node_members(node_atom);
+            }
+        } else {
+            tracing::debug!(
+                node = %node_atom,
+                our_addr = %connection_addr,
+                "Sender: skipping cleanup, connection was replaced"
+            );
         }
-        manager
-            .monitors
-            .notify_node_down(node_atom, "connection closed".to_string());
-        // Clean up process monitors and links for this node
-        manager.process_monitors.handle_node_down(node_atom);
-        // Clean up pg memberships from this node
-        super::pg::pg().remove_node_members(node_atom);
     }
 }
 
 /// Loop to receive messages from a remote node.
-async fn message_receiver_loop(node_atom: Atom) {
+///
+/// The `connection_addr` parameter identifies which specific connection this loop
+/// is handling. This prevents a race condition where an old receiver loop might
+/// accidentally clean up a replacement connection.
+async fn message_receiver_loop(node_atom: Atom, connection_addr: SocketAddr) {
     while let Some(manager) = DIST_MANAGER.get() {
         let connection = match manager.nodes.get(&node_atom) {
             Some(node) => {
+                // Check if this is still our connection (not a replacement)
+                if node.info.addr != Some(connection_addr) {
+                    // Connection was replaced, exit without cleanup
+                    tracing::debug!(
+                        node = %node_atom,
+                        our_addr = %connection_addr,
+                        "Connection replaced, receiver loop exiting"
+                    );
+                    return;
+                }
                 // Accept a stream
                 match node.connection.accept_stream().await {
                     Ok((_, recv)) => recv,
@@ -513,20 +561,34 @@ async fn message_receiver_loop(node_atom: Atom) {
         }
     }
 
-    // Clean up
-    if let Some(manager) = DIST_MANAGER.get()
-        && let Some((_, node)) = manager.nodes.remove(&node_atom)
-    {
-        if let Some(addr) = node.info.addr {
-            manager.addr_to_node.remove(&addr);
+    // Clean up - but only if this is still our connection
+    if let Some(manager) = DIST_MANAGER.get() {
+        // Check if the current connection is still ours before removing
+        let should_cleanup = manager
+            .nodes
+            .get(&node_atom)
+            .is_some_and(|node| node.info.addr == Some(connection_addr));
+
+        if should_cleanup {
+            if let Some((_, node)) = manager.nodes.remove(&node_atom) {
+                if let Some(addr) = node.info.addr {
+                    manager.addr_to_node.remove(&addr);
+                }
+                manager
+                    .monitors
+                    .notify_node_down(node_atom, "connection closed".to_string());
+                // Clean up process monitors and links for this node
+                manager.process_monitors.handle_node_down(node_atom);
+                // Clean up pg memberships from this node
+                super::pg::pg().remove_node_members(node_atom);
+            }
+        } else {
+            tracing::debug!(
+                node = %node_atom,
+                our_addr = %connection_addr,
+                "Skipping cleanup, connection was replaced"
+            );
         }
-        manager
-            .monitors
-            .notify_node_down(node_atom, "connection closed".to_string());
-        // Clean up process monitors and links for this node
-        manager.process_monitors.handle_node_down(node_atom);
-        // Clean up pg memberships from this node
-        super::pg::pg().remove_node_members(node_atom);
     }
 }
 

@@ -263,7 +263,11 @@ impl ProcessGroups {
                     from_node = %from_node,
                     "Received pg sync response"
                 );
-                // Merge remote group memberships
+                // First, remove any stale memberships from this node
+                // This prevents old PIDs from persisting after node restart
+                self.remove_node_members(from_node);
+
+                // Now merge the fresh remote group memberships
                 for (group, members) in groups {
                     for pid in members {
                         self.groups.entry(group.clone()).or_default().insert(pid);
