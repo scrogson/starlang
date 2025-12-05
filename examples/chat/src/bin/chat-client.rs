@@ -332,6 +332,10 @@ struct RoomState {
 
 /// Application state
 struct App {
+    /// Server host
+    host: String,
+    /// Server port
+    port: u16,
     /// Server address we're connected to
     server_addr: String,
     /// Theme colors
@@ -362,13 +366,18 @@ struct App {
     scroll_offset: usize,
     /// Whether we're connected
     connected: bool,
+    /// Whether we're currently reconnecting
+    reconnecting: bool,
     /// Show help popup
     show_help: bool,
 }
 
 impl App {
-    fn new(server_addr: String, theme: Theme, timestamp_format: String) -> Self {
+    fn new(host: String, port: u16, theme: Theme, timestamp_format: String) -> Self {
+        let server_addr = format!("{}:{}", host, port);
         Self {
+            host,
+            port,
             server_addr,
             theme,
             timestamp_format,
@@ -384,6 +393,7 @@ impl App {
             status: None,
             scroll_offset: 0,
             connected: false,
+            reconnecting: false,
             show_help: false,
         }
     }
@@ -479,6 +489,75 @@ enum AppEvent {
     Tick,
     /// Disconnected
     Disconnected,
+    /// Reconnected with new connection
+    Reconnected(tokio::net::tcp::OwnedWriteHalf),
+    /// Reconnection attempt failed
+    ReconnectFailed(String),
+}
+
+/// Spawns a task to read from the network and send events to the app.
+fn spawn_network_reader(mut reader: tokio::net::tcp::OwnedReadHalf, tx: mpsc::Sender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        let mut pending = Vec::new();
+
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => {
+                    let _ = tx.send(AppEvent::Disconnected).await;
+                    break;
+                }
+                Ok(n) => {
+                    pending.extend_from_slice(&buf[..n]);
+                    while let Some((event, consumed)) = parse_frame::<ServerEvent>(&pending) {
+                        pending.drain(..consumed);
+                        if tx.send(AppEvent::Server(event)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {
+                    let _ = tx.send(AppEvent::Disconnected).await;
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Spawns a background task to attempt reconnection with exponential backoff.
+fn spawn_reconnect_task(host: String, port: u16, tx: mpsc::Sender<AppEvent>) {
+    tokio::spawn(async move {
+        let addr = format!("{}:{}", host, port);
+        let mut delay = Duration::from_secs(1);
+        let max_delay = Duration::from_secs(30);
+
+        loop {
+            tokio::time::sleep(delay).await;
+
+            match TcpStream::connect(&addr).await {
+                Ok(stream) => {
+                    let (reader, writer) = stream.into_split();
+                    // Spawn a new reader for the reconnected stream
+                    spawn_network_reader(reader, tx.clone());
+                    // Send the new writer to the main loop
+                    let _ = tx.send(AppEvent::Reconnected(writer)).await;
+                    break;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(AppEvent::ReconnectFailed(format!(
+                            "Connection failed: {} (retrying in {}s)",
+                            e,
+                            delay.as_secs()
+                        )))
+                        .await;
+                    // Exponential backoff
+                    delay = (delay * 2).min(max_delay);
+                }
+            }
+        }
+    });
 }
 
 #[tokio::main]
@@ -493,7 +572,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to server
     let stream = TcpStream::connect(&addr).await?;
-    let (mut reader, mut writer) = stream.into_split();
+    let (reader, mut writer) = stream.into_split();
 
     // Set up terminal
     enable_raw_mode()?;
@@ -503,7 +582,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(addr.clone(), theme, timestamp_format);
+    let mut app = App::new(args.host.clone(), args.port, theme, timestamp_format);
     app.connected = true;
     app.set_status(format!("Connected to {}", addr));
 
@@ -511,33 +590,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut rx) = mpsc::channel::<AppEvent>(100);
 
     // Spawn network reader task
-    let tx_net = tx.clone();
-    tokio::spawn(async move {
-        let mut buf = vec![0u8; 4096];
-        let mut pending = Vec::new();
-
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => {
-                    let _ = tx_net.send(AppEvent::Disconnected).await;
-                    break;
-                }
-                Ok(n) => {
-                    pending.extend_from_slice(&buf[..n]);
-                    while let Some((event, consumed)) = parse_frame::<ServerEvent>(&pending) {
-                        pending.drain(..consumed);
-                        if tx_net.send(AppEvent::Server(event)).await.is_err() {
-                            return;
-                        }
-                    }
-                }
-                Err(_) => {
-                    let _ = tx_net.send(AppEvent::Disconnected).await;
-                    break;
-                }
-            }
-        }
-    });
+    spawn_network_reader(reader, tx.clone());
 
     // Spawn input reader task
     let tx_input = tx.clone();
@@ -577,7 +630,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Main event loop
-    let result = run_app(&mut terminal, &mut app, &mut rx, &mut writer).await;
+    let result = run_app(&mut terminal, &mut app, &mut rx, tx, writer).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -599,7 +652,8 @@ async fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     rx: &mut mpsc::Receiver<AppEvent>,
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    tx: mpsc::Sender<AppEvent>,
+    mut writer: tokio::net::tcp::OwnedWriteHalf,
 ) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
@@ -607,10 +661,10 @@ async fn run_app<B: ratatui::backend::Backend>(
         if let Some(event) = rx.recv().await {
             match event {
                 AppEvent::Server(server_event) => {
-                    handle_server_event(app, server_event, writer).await?;
+                    handle_server_event(app, server_event, &mut writer).await?;
                 }
                 AppEvent::Input(input_event) => {
-                    if handle_input(app, input_event, writer).await? {
+                    if handle_input(app, input_event, &mut writer).await? {
                         return Ok(());
                     }
                 }
@@ -623,8 +677,34 @@ async fn run_app<B: ratatui::backend::Backend>(
                     }
                 }
                 AppEvent::Disconnected => {
-                    app.connected = false;
-                    app.set_status("Disconnected from server");
+                    if !app.reconnecting {
+                        app.connected = false;
+                        app.reconnecting = true;
+                        app.set_status("Disconnected - reconnecting...");
+                        // Start reconnection task
+                        spawn_reconnect_task(app.host.clone(), app.port, tx.clone());
+                    }
+                }
+                AppEvent::Reconnected(new_writer) => {
+                    writer = new_writer;
+                    app.connected = true;
+                    app.reconnecting = false;
+                    app.set_status("Reconnected!");
+
+                    // Restore state: re-send nick if we had one
+                    if let Some(ref nick) = app.nick {
+                        let frame = frame_message(&ClientCommand::Nick(nick.clone()));
+                        let _ = writer.write_all(&frame).await;
+                    }
+
+                    // Re-join current room if we had one
+                    if let Some(ref room) = app.current_room {
+                        let frame = frame_message(&ClientCommand::Join(room.clone()));
+                        let _ = writer.write_all(&frame).await;
+                    }
+                }
+                AppEvent::ReconnectFailed(msg) => {
+                    app.set_status(msg);
                 }
             }
         }
