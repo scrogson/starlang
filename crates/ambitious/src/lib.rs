@@ -166,6 +166,9 @@ pub mod pubsub;
 /// Timer module for scheduling delayed and repeated operations.
 pub mod timer;
 
+/// Process-owned concurrent key-value storage (ETS-like).
+pub mod store;
+
 /// Peer node management for spawning and controlling linked nodes.
 ///
 /// This module is only available when the `peer` feature is enabled.
@@ -242,6 +245,9 @@ pub mod prelude {
 
     // Timer essentials
     pub use crate::timer::{TimerError, TimerRef, TimerResult};
+
+    // Store essentials
+    pub use crate::store::{Access, Store, StoreError, StoreId, StoreOptions};
 }
 
 #[cfg(test)]

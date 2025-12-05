@@ -243,6 +243,9 @@ impl RuntimeHandle {
                 .notify_local_process_down(pid, &reason);
         }
 
+        // Clean up any stores owned by this process
+        crate::store::cleanup_owned_stores(pid, &reason);
+
         // Unregister the process
         registry.unregister(pid);
     }
